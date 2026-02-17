@@ -66,13 +66,33 @@ enum CreditScope: Hashable, Codable {
             if tracks.count == 1, let first = tracks.first {
                 return "Track \(first)"
             }
-            let compact = tracks.map(String.init).joined(separator: ",")
-            return "Tracks \(compact)"
+            return "Tracks \(Self.compactTrackList(tracks.sorted()))"
         case .trackRange(let start, let end):
-            return "Tracks \(start)-\(end)"
+            return "Tracks \(start)–\(end)"
         case .trackUnknown:
             return "Track-specific"
         }
+    }
+
+    /// Compresses a sorted list of track numbers into a compact string with ranges.
+    /// e.g. [1, 3, 4, 5, 6, 7, 11, 12] → "1, 3–7, 11, 12"
+    static func compactTrackList(_ sorted: [Int]) -> String {
+        guard !sorted.isEmpty else { return "" }
+        var parts: [String] = []
+        var rangeStart = sorted[0]
+        var rangeEnd = sorted[0]
+
+        for i in 1..<sorted.count {
+            if sorted[i] == rangeEnd + 1 {
+                rangeEnd = sorted[i]
+            } else {
+                parts.append(rangeEnd > rangeStart ? "\(rangeStart)–\(rangeEnd)" : "\(rangeStart)")
+                rangeStart = sorted[i]
+                rangeEnd = sorted[i]
+            }
+        }
+        parts.append(rangeEnd > rangeStart ? "\(rangeStart)–\(rangeEnd)" : "\(rangeStart)")
+        return parts.joined(separator: ", ")
     }
 
     func applies(to trackNumber: Int?) -> Bool {

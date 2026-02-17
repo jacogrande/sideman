@@ -243,7 +243,7 @@ struct MenuBarContentView: View {
                                     .foregroundStyle(.secondary)
 
                                 ForEach(rows, id: \.id) { row in
-                                    CreditPersonRow(row: row)
+                                    CreditPersonRow(row: row, hasMatchedTrack: bundle.matchedTrackNumber != nil)
                                 }
                             }
                         }
@@ -443,6 +443,7 @@ private struct AggregatedCreditBuilder {
 
 private struct CreditPersonRow: View {
     let row: AggregatedCreditRow
+    var hasMatchedTrack: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -477,6 +478,18 @@ private struct CreditPersonRow: View {
     }
 
     private var scopeSummary: String {
+        if hasMatchedTrack {
+            let hasAlbumWide = row.scopeLabels.contains("Album-wide")
+            let hasTrackSpecific = row.scopeLabels.contains(where: { $0 != "Album-wide" })
+            if hasAlbumWide && hasTrackSpecific {
+                return "This track + album"
+            } else if hasAlbumWide {
+                return "Album-wide"
+            } else {
+                return "This track"
+            }
+        }
+
         if row.scopeLabels.count <= 1 {
             return row.scopeLabels.first ?? "Album-wide"
         }

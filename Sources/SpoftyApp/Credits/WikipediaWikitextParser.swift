@@ -8,6 +8,7 @@ struct DefaultWikipediaWikitextParser: WikipediaWikitextParser {
 
     private static let lineItemPrefixRegex = makeRegex(#"^[\*#;:]+\s*"#)
     private static let scopeRegex = makeRegex(#"\(([^\)]*track[^\)]*)\)"#, options: [.caseInsensitive])
+    private static let numericScopeRegex = makeRegex(#"\(([^)]+)\)\s*$"#)
     private static let trackRangeRegex = makeRegex(#"(\d+)\s*[-–]\s*(\d+)"#)
     private static let trackNumberRegex = makeRegex(#"\b(\d+)\b"#)
     private static let numberedTrackRegexes: [NSRegularExpression] = [
@@ -21,7 +22,7 @@ struct DefaultWikipediaWikitextParser: WikipediaWikitextParser {
     )
     private static let quotedTitleRegex = makeRegex(#"\"([^\"]+)\""#)
     private static let listIndexPrefixRegex = makeRegex(#"^#+\s*"#)
-    private static let headingRegex = makeRegex(#"(?m)^==+\s*([^=\n]+?)\s*==+\s*$"#)
+    private static let headingRegex = makeRegex(#"(?m)^(=+)\s*([^=\n]+?)\s*\1\s*$"#)
 
     private static func makeRegex(_ pattern: String, options: NSRegularExpression.Options = []) -> NSRegularExpression {
         // Patterns are compile-time constants. Fail fast if one becomes invalid.
@@ -32,11 +33,12 @@ struct DefaultWikipediaWikitextParser: WikipediaWikitextParser {
         let normalized = sanitizeWikitext(page.wikitext)
         let trackListing = extractSection(matchingAny: ["track listing"], in: normalized)
         let trackMap = parseTrackListing(from: trackListing ?? "")
-        let matchedTrack = resolveTrackNumber(for: track.title, using: trackMap)
+        let inferredTrack = resolveTrackNumber(for: track.title, using: trackMap)
+        let matchedTrack = track.trackNumber ?? inferredTrack
 
         DebugLogger.log(
             .provider,
-            "wikipedia parse page='\(page.title)' trackMatch=\(matchedTrack.map(String.init) ?? "nil") parsedTrackRows=\(trackMap.count)"
+            "wikipedia parse page='\(page.title)' trackMatch=\(matchedTrack.map(String.init) ?? "nil") inferredTrack=\(inferredTrack.map(String.init) ?? "nil") parsedTrackRows=\(trackMap.count)"
         )
 
         guard let personnelSection = extractSection(
@@ -76,16 +78,45 @@ struct DefaultWikipediaWikitextParser: WikipediaWikitextParser {
             }
 
             let item = stripLineItemPrefix(from: line)
+
             guard let split = splitPersonnelItem(item) else {
+                // Name-only line: try extracting a numeric track scope.
+                var nameCandidate = item
+                let nameScope = extractScope(from: &nameCandidate)
+                if nameScope != .albumWide {
+                    let cleanedName = cleanupWikiMarkup(nameCandidate)
+                    guard !cleanedName.isEmpty else { continue }
+                    let entry = CreditEntry(
+                        personName: cleanedName,
+                        roleRaw: "performer",
+                        roleGroup: .musicians,
+                        sourceLevel: .recording,
+                        instrument: nil,
+                        source: .wikipedia,
+                        scope: nameScope,
+                        sourceURL: page.fullURL,
+                        sourceAttribution: attribution
+                    )
+                    entries.append(entry)
+                }
                 continue
             }
 
             let cleanedName = cleanupWikiMarkup(split.name)
-            var roleText = cleanupWikiMarkup(split.role)
-            let scope = extractScope(from: &roleText)
+            let roleText = cleanupWikiMarkup(split.role)
+            let segments = splitRoleSegments(roleText)
 
-            let roles = splitRoles(roleText)
-            for role in roles {
+            for segment in segments {
+                var segText = segment.text
+                let beforeExtract = segText
+                var scope = extractScope(from: &segText)
+                // Only inherit group scope if no explicit scope was found (text unchanged).
+                if scope == .albumWide, segText == beforeExtract, let groupScope = segment.groupScope {
+                    scope = groupScope
+                }
+                let role = segText.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !role.isEmpty else { continue }
+
                 let roleGroup = CreditsMapper.roleGroup(forRoleText: role)
                 let instrument = inferInstrument(role: role, roleGroup: roleGroup)
                 let sourceLevel: CreditSourceLevel = (scope == .albumWide) ? .release : .recording
@@ -125,19 +156,72 @@ struct DefaultWikipediaWikitextParser: WikipediaWikitextParser {
         return nil
     }
 
-    private func splitRoles(_ roleText: String) -> [String] {
-        let prepared = roleText
-            .replacingOccurrences(of: " and ", with: ", ")
-            .replacingOccurrences(of: ";", with: ",")
+    private struct RoleSegment {
+        let text: String
+        let groupScope: CreditScope?
+    }
 
-        let parts = prepared
-            .split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
+    /// Splits role text by semicolons (groups) then commas within each group, respecting parentheses.
+    /// Items without a scope inherit the trailing scope of their semicolon group.
+    private func splitRoleSegments(_ roleText: String) -> [RoleSegment] {
+        let groups = splitParenAware(roleText, on: ";")
+        var result: [RoleSegment] = []
 
-        if parts.isEmpty {
-            return [roleText.trimmingCharacters(in: .whitespacesAndNewlines)]
+        for group in groups {
+            let items = splitParenAware(group, on: ",")
+
+            // Determine group scope from the last item.
+            var trailingText = items.last ?? ""
+            let trailingScope = extractScope(from: &trailingText)
+            let groupScope: CreditScope? = (trailingScope != .albumWide) ? trailingScope : nil
+
+            for item in items {
+                result.append(RoleSegment(text: item, groupScope: groupScope))
+            }
         }
+
+        if result.isEmpty {
+            return [RoleSegment(text: roleText.trimmingCharacters(in: .whitespacesAndNewlines), groupScope: nil)]
+        }
+
+        return result
+    }
+
+    /// Splits text by a delimiter character and " and ", respecting parenthesized content.
+    private func splitParenAware(_ text: String, on delimiter: Character) -> [String] {
+        var parts: [String] = []
+        var current = ""
+        var depth = 0
+        var index = text.startIndex
+
+        while index < text.endIndex {
+            let char = text[index]
+            if char == "(" {
+                depth += 1
+                current.append(char)
+                index = text.index(after: index)
+            } else if char == ")" {
+                depth = max(0, depth - 1)
+                current.append(char)
+                index = text.index(after: index)
+            } else if depth == 0, char == delimiter {
+                let trimmed = current.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { parts.append(trimmed) }
+                current = ""
+                index = text.index(after: index)
+            } else if depth == 0, delimiter == ",", text[index...].hasPrefix(" and ") {
+                let trimmed = current.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { parts.append(trimmed) }
+                current = ""
+                index = text.index(index, offsetBy: 5)
+            } else {
+                current.append(char)
+                index = text.index(after: index)
+            }
+        }
+
+        let trimmed = current.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { parts.append(trimmed) }
 
         return parts
     }
@@ -150,25 +234,43 @@ struct DefaultWikipediaWikitextParser: WikipediaWikitextParser {
     private func extractScope(from roleText: inout String) -> CreditScope {
         let range = NSRange(roleText.startIndex..., in: roleText)
 
-        guard let match = Self.scopeRegex.firstMatch(in: roleText, options: [], range: range),
-              let fullRange = Range(match.range(at: 0), in: roleText),
-              let scopeRange = Range(match.range(at: 1), in: roleText) else {
-            return .albumWide
+        // First: try the existing "track" keyword pattern.
+        if let match = Self.scopeRegex.firstMatch(in: roleText, options: [], range: range),
+           let fullRange = Range(match.range(at: 0), in: roleText),
+           let scopeRange = Range(match.range(at: 1), in: roleText) {
+            let scopeText = String(roleText[scopeRange])
+            roleText.removeSubrange(fullRange)
+            roleText = roleText.trimmingCharacters(in: .whitespacesAndNewlines)
+            return scopeFromText(scopeText)
         }
 
-        let scopeText = roleText[scopeRange].lowercased()
-        roleText.removeSubrange(fullRange)
-        roleText = roleText.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Second: try a trailing numeric parenthetical like (1, 3, 7).
+        if let match = Self.numericScopeRegex.firstMatch(in: roleText, options: [], range: range),
+           let fullRange = Range(match.range(at: 0), in: roleText),
+           let scopeRange = Range(match.range(at: 1), in: roleText) {
+            let candidate = String(roleText[scopeRange])
+            if isNumericTrackList(candidate) {
+                roleText.removeSubrange(fullRange)
+                roleText = roleText.trimmingCharacters(in: .whitespacesAndNewlines)
+                return scopeFromText(candidate)
+            }
+        }
 
-        if scopeText.contains("all tracks except") {
+        return .albumWide
+    }
+
+    private func scopeFromText(_ scopeText: String) -> CreditScope {
+        let lowered = scopeText.lowercased()
+
+        if lowered.contains("all tracks except") {
             return .trackUnknown
         }
 
-        if scopeText.contains("all tracks") {
+        if lowered.contains("all tracks") {
             return .albumWide
         }
 
-        let parsed = parseTrackReferences(from: scopeText)
+        let parsed = parseTrackReferences(from: lowered)
         if let range = parsed.range, parsed.explicitTracks.isEmpty {
             return .trackRange(range.lowerBound, range.upperBound)
         }
@@ -213,6 +315,14 @@ struct DefaultWikipediaWikitextParser: WikipediaWikitextParser {
         }
 
         return (tracks, explicit, onlyRange)
+    }
+
+    private func isNumericTrackList(_ text: String) -> Bool {
+        let stripped = text
+            .replacingOccurrences(of: "and", with: "", options: .caseInsensitive)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !stripped.isEmpty else { return false }
+        return stripped.allSatisfy { $0.isNumber || $0.isWhitespace || $0 == "," || $0 == "-" || $0 == "–" }
     }
 
     private func inferInstrument(role: String, roleGroup: CreditRoleGroup) -> String? {
@@ -378,10 +488,12 @@ struct DefaultWikipediaWikitextParser: WikipediaWikitextParser {
         }
 
         for (index, match) in matches.enumerated() {
-            guard let titleRange = Range(match.range(at: 1), in: text) else {
+            guard let levelRange = Range(match.range(at: 1), in: text),
+                  let titleRange = Range(match.range(at: 2), in: text) else {
                 continue
             }
 
+            let currentHeadingLevel = text[levelRange].count
             let title = text[titleRange].lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
             let isMatch = candidates.contains(where: { title.contains($0) })
             guard isMatch else {
@@ -389,7 +501,22 @@ struct DefaultWikipediaWikitextParser: WikipediaWikitextParser {
             }
 
             let sectionStart = match.range.upperBound
-            let sectionEnd = index + 1 < matches.count ? matches[index + 1].range.location : nsRange.upperBound
+            var sectionEnd = nsRange.upperBound
+            if index + 1 < matches.count {
+                for nextIndex in (index + 1)..<matches.count {
+                    let nextMatch = matches[nextIndex]
+                    guard let nextLevelRange = Range(nextMatch.range(at: 1), in: text) else {
+                        continue
+                    }
+
+                    let nextHeadingLevel = text[nextLevelRange].count
+                    // Keep nested subsections (e.g. ===Additional personnel===) inside the parent section.
+                    if nextHeadingLevel <= currentHeadingLevel {
+                        sectionEnd = nextMatch.range.location
+                        break
+                    }
+                }
+            }
             let sectionRange = NSRange(location: sectionStart, length: max(sectionEnd - sectionStart, 0))
 
             if let swiftRange = Range(sectionRange, in: text) {
