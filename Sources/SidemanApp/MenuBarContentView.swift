@@ -38,7 +38,7 @@ struct MenuBarContentView: View {
     private var header: some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Spofty")
+                Text("Sideman")
                     .font(.system(size: 19, weight: .semibold, design: .rounded))
                 Text("Spotify now playing")
                     .font(.system(size: 11, weight: .medium, design: .rounded))

@@ -6,7 +6,11 @@ actor SpotifyAppleScriptNowPlayingProvider: NowPlayingProvider {
       tell application "Spotify"
         if player state is playing then
           set t to current track
-          return "PLAYING||" & (id of t) & "||" & (name of t) & "||" & (artist of t) & "||" & (album of t)
+          set trackNumberValue to 0
+          try
+            set trackNumberValue to track number of t
+          end try
+          return "PLAYING||" & trackNumberValue & "||" & (id of t) & "||" & (name of t) & "||" & (artist of t) & "||" & (album of t)
         else
           return "PAUSED"
         end if
@@ -77,6 +81,19 @@ enum SpotifyAppleScriptParser {
 
         if rawOutput.hasPrefix("PLAYING||") {
             let parts = rawOutput.components(separatedBy: "||")
+            if parts.count >= 6 {
+                let trackNumber = Int(parts[1]).flatMap { $0 > 0 ? $0 : nil }
+                let track = NowPlayingTrack(
+                    id: parts[2],
+                    title: parts[3],
+                    artist: parts[4],
+                    album: parts[5...].joined(separator: "||"),
+                    trackNumber: trackNumber
+                )
+                return .playing(track)
+            }
+
+            // Backward compatibility with older app payloads that did not include track number.
             if parts.count >= 5 {
                 let track = NowPlayingTrack(
                     id: parts[1],
@@ -86,6 +103,7 @@ enum SpotifyAppleScriptParser {
                 )
                 return .playing(track)
             }
+
             return .unknown("Malformed PLAYING payload")
         }
 

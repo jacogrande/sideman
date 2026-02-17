@@ -94,7 +94,7 @@ actor MemoryDiskCreditsCache: CreditsCache {
             ?? URL(fileURLWithPath: NSTemporaryDirectory())
 
         return baseDirectory
-            .appendingPathComponent("spofty", isDirectory: true)
+            .appendingPathComponent("sideman", isDirectory: true)
             .appendingPathComponent("credits-cache.json")
     }
 }

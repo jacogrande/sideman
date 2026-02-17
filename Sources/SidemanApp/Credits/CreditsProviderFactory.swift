@@ -6,7 +6,7 @@ enum CreditsBackend: String {
     case wikipediaThenMusicBrainz = "wikipedia_then_musicbrainz"
 
     static func fromEnvironment(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> CreditsBackend {
-        guard let raw = environment["SPOFTY_CREDITS_BACKEND"]?.lowercased() else {
+        guard let raw = environment["SIDEMAN_CREDITS_BACKEND"]?.lowercased() else {
             return .wikipedia
         }
 

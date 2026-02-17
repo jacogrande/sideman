@@ -5,8 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BUILD_DIR="$PROJECT_ROOT/build"
 
-APP_NAME="Spofty"
-EXECUTABLE_NAME="SpoftyApp"
+APP_NAME="Sideman"
+EXECUTABLE_NAME="SidemanApp"
 BUNDLE_NAME="$APP_NAME.app"
 
 # ---------------------------------------------------------------------------
@@ -68,7 +68,7 @@ if [[ -n "${DEVELOPER_ID_APPLICATION:-}" ]]; then
     echo "==> Signing with identity: $DEVELOPER_ID_APPLICATION"
     codesign --force --deep --timestamp \
         --options runtime \
-        --entitlements "$PROJECT_ROOT/SupportFiles/Spofty.entitlements" \
+        --entitlements "$PROJECT_ROOT/SupportFiles/Sideman.entitlements" \
         --sign "$DEVELOPER_ID_APPLICATION" \
         "$APP_BUNDLE"
     echo "==> Verifying signature..."

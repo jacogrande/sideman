@@ -2,22 +2,22 @@
 import PackageDescription
 
 let package = Package(
-    name: "spofty",
+    name: "sideman",
     platforms: [
         .macOS(.v13)
     ],
     products: [
-        .executable(name: "SpoftyApp", targets: ["SpoftyApp"])
+        .executable(name: "SidemanApp", targets: ["SidemanApp"])
     ],
     targets: [
         .executableTarget(
-            name: "SpoftyApp",
-            path: "Sources/SpoftyApp"
+            name: "SidemanApp",
+            path: "Sources/SidemanApp"
         ),
         .testTarget(
-            name: "SpoftyAppTests",
-            dependencies: ["SpoftyApp"],
-            path: "Tests/SpoftyAppTests"
+            name: "SidemanAppTests",
+            dependencies: ["SidemanApp"],
+            path: "Tests/SidemanAppTests"
         )
     ]
 )

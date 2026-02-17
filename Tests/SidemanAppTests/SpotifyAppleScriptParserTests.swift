@@ -1,9 +1,9 @@
 import XCTest
-@testable import SpoftyApp
+@testable import SidemanApp
 
 final class SpotifyAppleScriptParserTests: XCTestCase {
     func testParsePlayingPayload() {
-        let raw = "PLAYING||spotify:track:abc123||Song Title||Song Artist||Song Album"
+        let raw = "PLAYING||2||spotify:track:abc123||Song Title||Song Artist||Song Album"
 
         let snapshot = SpotifyAppleScriptParser.parse(raw)
 
@@ -12,7 +12,18 @@ final class SpotifyAppleScriptParserTests: XCTestCase {
         XCTAssertEqual(snapshot.track?.title, "Song Title")
         XCTAssertEqual(snapshot.track?.artist, "Song Artist")
         XCTAssertEqual(snapshot.track?.album, "Song Album")
+        XCTAssertEqual(snapshot.track?.trackNumber, 2)
         XCTAssertNil(snapshot.errorMessage)
+    }
+
+    func testParseLegacyPlayingPayloadWithoutTrackNumber() {
+        let raw = "PLAYING||spotify:track:abc123||Song Title||Song Artist||Song Album"
+
+        let snapshot = SpotifyAppleScriptParser.parse(raw)
+
+        XCTAssertEqual(snapshot.state, .playing)
+        XCTAssertEqual(snapshot.track?.id, "spotify:track:abc123")
+        XCTAssertNil(snapshot.track?.trackNumber)
     }
 
     func testParsePausedPayload() {

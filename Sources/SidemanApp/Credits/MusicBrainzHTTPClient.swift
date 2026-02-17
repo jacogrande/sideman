@@ -11,7 +11,7 @@ actor MusicBrainzHTTPClient: MusicBrainzClient {
     init(
         session: URLSession = .shared,
         baseURL: URL = URL(string: "https://musicbrainz.org/ws/2")!,
-        userAgent: String = "Spofty/0.1 (https://github.com/jackson/spofty)",
+        userAgent: String = "Sideman/0.1 (https://github.com/jackson/sideman)",
         minIntervalSeconds: TimeInterval = 1.0,
         requestTimeout: TimeInterval = 10
     ) {

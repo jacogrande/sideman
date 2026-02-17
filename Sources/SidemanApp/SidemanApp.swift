@@ -1,16 +1,14 @@
 import SwiftUI
 
 @main
-struct SpoftyApp: App {
+struct SidemanApp: App {
     @StateObject private var viewModel: MenuBarViewModel
-    @StateObject private var debugLogStore: DebugLogStore
 
     init() {
         let nowPlayingProvider = SpotifyAppleScriptNowPlayingProvider()
         let creditsCache = MemoryDiskCreditsCache()
         let backend = CreditsBackend.fromEnvironment()
         let creditsProvider = CreditsProviderFactory.makeProvider(backend: backend, cache: creditsCache)
-        let debugStore = DebugLogStore()
 
         DebugLogger.log(.app, "credits backend=\(backend.rawValue)")
 
@@ -20,12 +18,11 @@ struct SpoftyApp: App {
                 creditsProvider: creditsProvider
             )
         )
-        _debugLogStore = StateObject(wrappedValue: debugStore)
     }
 
     var body: some Scene {
-        MenuBarExtra("Spofty", systemImage: "music.note") {
-            MenuBarContentView(viewModel: viewModel, debugLogStore: debugLogStore)
+        MenuBarExtra("Sideman", systemImage: "music.note") {
+            MenuBarContentView(viewModel: viewModel)
         }
         .menuBarExtraStyle(.window)
     }

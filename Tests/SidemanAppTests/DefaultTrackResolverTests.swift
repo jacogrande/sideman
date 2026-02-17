@@ -1,5 +1,5 @@
 import XCTest
-@testable import SpoftyApp
+@testable import SidemanApp
 
 final class DefaultTrackResolverTests: XCTestCase {
     func testResolveReturnsSuccessForStrongSingleCandidate() async {

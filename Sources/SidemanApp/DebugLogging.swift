@@ -23,15 +23,15 @@ struct DebugLogEntry: Identifiable {
 }
 
 extension Notification.Name {
-    static let spoftyDebugLog = Notification.Name("spofty.debug.log")
+    static let sidemanDebugLog = Notification.Name("sideman.debug.log")
 }
 
 enum DebugLogger {
     static func log(_ category: DebugLogCategory, _ message: String) {
         let entry = DebugLogEntry(timestamp: Date(), category: category, message: message)
         let timestamp = String(format: "%.3f", entry.timestamp.timeIntervalSince1970)
-        fputs("[SPOFTY][\(category.title)][\(timestamp)] \(message)\n", stderr)
-        NotificationCenter.default.post(name: .spoftyDebugLog, object: entry)
+        fputs("[SIDEMAN][\(category.title)][\(timestamp)] \(message)\n", stderr)
+        NotificationCenter.default.post(name: .sidemanDebugLog, object: entry)
     }
 }
 
@@ -45,7 +45,7 @@ final class DebugLogStore: ObservableObject {
 
     init(maxEntries: Int = 350) {
         self.maxEntries = maxEntries
-        observerCancellable = NotificationCenter.default.publisher(for: .spoftyDebugLog)
+        observerCancellable = NotificationCenter.default.publisher(for: .sidemanDebugLog)
             .receive(on: RunLoop.main)
             .sink { [weak self] notification in
                 self?.handle(notification: notification)

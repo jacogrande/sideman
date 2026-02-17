@@ -63,25 +63,25 @@ jobs:
       - name: Verify artifacts
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          test -d "build/Spofty.app"
-          test -f "build/Spofty-v${VERSION}.dmg"
+          test -d "build/Sideman.app"
+          test -f "build/Sideman-v${VERSION}.dmg"
           # Verify version is embedded in Info.plist
-          EMBEDDED=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" build/Spofty.app/Contents/Info.plist)
+          EMBEDDED=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" build/Sideman.app/Contents/Info.plist)
           echo "Embedded version: $EMBEDDED"
           [[ "$EMBEDDED" == "$VERSION" ]]
 
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Spofty-DMG
-          path: build/Spofty-v*.dmg
+          name: Sideman-DMG
+          path: build/Sideman-v*.dmg
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          DMG_PATH="build/Spofty-v${VERSION}.dmg"
+          DMG_PATH="build/Sideman-v${VERSION}.dmg"
 
           PRERELEASE_FLAG=""
           if [[ "$VERSION" == *-* ]]; then
@@ -89,7 +89,7 @@ jobs:
           fi
 
           gh release create "$GITHUB_REF_NAME" "$DMG_PATH" \
-            --title "Spofty $GITHUB_REF_NAME" \
+            --title "Sideman $GITHUB_REF_NAME" \
             --generate-notes \
             $PRERELEASE_FLAG
 

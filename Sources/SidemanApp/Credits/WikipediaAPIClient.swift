@@ -27,7 +27,7 @@ actor WikipediaAPIClientImpl: WikipediaAPIClient {
     init(
         session: URLSession = .shared,
         apiURL: URL = URL(string: "https://en.wikipedia.org/w/api.php")!,
-        userAgent: String = "Spofty/0.1 (https://github.com/jackson/spofty)",
+        userAgent: String = "Sideman/0.1 (https://github.com/jackson/sideman)",
         minIntervalSeconds: TimeInterval = 0.4,
         requestTimeout: TimeInterval = 12
     ) {

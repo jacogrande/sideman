@@ -12,6 +12,21 @@ struct NowPlayingTrack: Equatable {
     let title: String
     let artist: String
     let album: String
+    let trackNumber: Int?
+
+    init(
+        id: String,
+        title: String,
+        artist: String,
+        album: String,
+        trackNumber: Int? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.artist = artist
+        self.album = album
+        self.trackNumber = trackNumber
+    }
 }
 
 struct PlaybackSnapshot: Equatable {
