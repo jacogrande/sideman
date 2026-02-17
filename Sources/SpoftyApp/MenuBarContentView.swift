@@ -26,6 +26,7 @@ struct MenuBarContentView: View {
             VStack(alignment: .leading, spacing: 14) {
                 header
                 contentCard
+                creditsCard
                 footer
             }
             .padding(14)
@@ -148,6 +149,105 @@ struct MenuBarContentView: View {
         }
     }
 
+    private var creditsCard: some View {
+        GlassPanel {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("Credits")
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    Spacer(minLength: 0)
+                    Text(creditsStateLabel)
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.secondary)
+                }
+
+                switch viewModel.creditsState {
+                case .idle:
+                    Text("Credits load automatically when a track is playing.")
+                        .font(.system(size: 12, weight: .regular, design: .rounded))
+                        .foregroundStyle(.secondary)
+
+                case .resolving:
+                    LoadingCreditsView(message: "Resolving recording match…")
+
+                case .loadingCredits:
+                    LoadingCreditsView(message: "Loading credits from MusicBrainz…")
+
+                case .notFound:
+                    Text("No credits found for this track.")
+                        .font(.system(size: 12, weight: .regular, design: .rounded))
+                        .foregroundStyle(.secondary)
+
+                case .ambiguous:
+                    Text("Match was ambiguous. Credits were not auto-selected.")
+                        .font(.system(size: 12, weight: .regular, design: .rounded))
+                        .foregroundStyle(.secondary)
+
+                case .rateLimited:
+                    Text("MusicBrainz rate limit reached. Try again in a moment.")
+                        .font(.system(size: 12, weight: .regular, design: .rounded))
+                        .foregroundStyle(.secondary)
+
+                case .error(let message):
+                    Text(message)
+                        .font(.system(size: 12, weight: .regular, design: .rounded))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+
+                case .loaded:
+                    loadedCreditsContent
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var loadedCreditsContent: some View {
+        if let bundle = viewModel.creditsBundle, !bundle.isEmpty {
+            VStack(alignment: .leading, spacing: 9) {
+                ForEach(CreditRoleGroup.displayOrder, id: \.rawValue) { group in
+                    let entries = bundle.entries(for: group)
+                    if !entries.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(group.title)
+                                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                .foregroundStyle(.secondary)
+
+                            ForEach(entries, id: \.self) { entry in
+                                CreditEntryRow(entry: entry)
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            Text("No credits available for this recording.")
+                .font(.system(size: 12, weight: .regular, design: .rounded))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var creditsStateLabel: String {
+        switch viewModel.creditsState {
+        case .idle:
+            return "Idle"
+        case .resolving:
+            return "Resolving"
+        case .loadingCredits:
+            return "Loading"
+        case .loaded:
+            return "Loaded"
+        case .notFound:
+            return "No Match"
+        case .ambiguous:
+            return "Ambiguous"
+        case .rateLimited:
+            return "Rate Limited"
+        case .error:
+            return "Error"
+        }
+    }
+
     private func openSpotify() {
         #if canImport(AppKit)
         if let id = viewModel.snapshot.track?.id, let trackURL = URL(string: id) {
@@ -159,6 +259,60 @@ struct MenuBarContentView: View {
             _ = NSWorkspace.shared.open(appURL)
         }
         #endif
+    }
+}
+
+private struct LoadingCreditsView: View {
+    let message: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+            Text(message)
+                .font(.system(size: 12, weight: .regular, design: .rounded))
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct CreditEntryRow: View {
+    let entry: CreditEntry
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(entry.personName)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .lineLimit(1)
+
+                Spacer(minLength: 0)
+
+                Text(entry.sourceLevel.badgeTitle)
+                    .font(.system(size: 9, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(.thinMaterial, in: Capsule())
+                    .overlay(
+                        Capsule()
+                            .strokeBorder(.white.opacity(0.22), lineWidth: 0.6)
+                    )
+            }
+
+            Text(subtitle)
+                .font(.system(size: 11, weight: .regular, design: .rounded))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+        }
+    }
+
+    private var subtitle: String {
+        if let instrument = entry.instrument, !instrument.isEmpty {
+            return "\(entry.roleRaw) • \(instrument)"
+        }
+
+        return entry.roleRaw
     }
 }
 
