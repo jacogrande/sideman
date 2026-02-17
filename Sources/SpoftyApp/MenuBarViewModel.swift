@@ -8,6 +8,8 @@ final class MenuBarViewModel: ObservableObject {
     @Published private(set) var isLoading = false
     @Published private(set) var creditsState: CreditsLookupState = .idle
     @Published private(set) var creditsBundle: CreditsBundle?
+    @Published var resourceSnapshot: ResourceSnapshot?
+    @Published var isDiagnosticsVisible = false
 
     private let provider: NowPlayingProvider
     private let creditsProvider: CreditsProvider?
@@ -80,6 +82,10 @@ final class MenuBarViewModel: ObservableObject {
         lastUpdated = date
         isLoading = false
         return changed
+    }
+
+    func captureDiagnostics() {
+        resourceSnapshot = ResourceMonitor.captureSnapshot()
     }
 
     private func refreshCreditsIfNeeded(for latestSnapshot: PlaybackSnapshot, forceRefresh: Bool) async {

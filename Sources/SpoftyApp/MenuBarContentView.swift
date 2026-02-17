@@ -5,7 +5,6 @@ import AppKit
 
 struct MenuBarContentView: View {
     @ObservedObject var viewModel: MenuBarViewModel
-    @ObservedObject var debugLogStore: DebugLogStore
 
     private var status: StatusPresentation {
         switch viewModel.snapshot.state {
@@ -28,14 +27,12 @@ struct MenuBarContentView: View {
                 header
                 contentCard
                 creditsCard
-                if debugLogStore.isEnabled {
-                    debugCard
-                }
+                diagnosticsCard
                 footer
             }
             .padding(14)
         }
-        .frame(width: 360)
+        .frame(width: 420)
     }
 
     private var header: some View {
@@ -76,6 +73,12 @@ struct MenuBarContentView: View {
                                 .foregroundStyle(.secondary)
                                 .lineLimit(2)
 
+                            if let trackNumber = track.trackNumber {
+                                Text("Track \(trackNumber)")
+                                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                                    .foregroundStyle(.secondary)
+                            }
+
                             if !track.id.isEmpty {
                                 Text(track.id)
                                     .font(.system(size: 10, weight: .medium, design: .monospaced))
@@ -111,6 +114,13 @@ struct MenuBarContentView: View {
         }
     }
 
+    @ViewBuilder
+    private var diagnosticsCard: some View {
+        if viewModel.isDiagnosticsVisible, let snapshot = viewModel.resourceSnapshot {
+            DiagnosticsCardView(snapshot: snapshot)
+        }
+    }
+
     private var footer: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let lastUpdated = viewModel.lastUpdated {
@@ -141,12 +151,17 @@ struct MenuBarContentView: View {
                 .buttonStyle(GlassActionButtonStyle(tint: Color(red: 0.30, green: 0.72, blue: 0.55), isPrimary: false))
 
                 Button {
-                    let nextValue = !debugLogStore.isEnabled
-                    debugLogStore.setEnabled(nextValue)
+                    viewModel.isDiagnosticsVisible.toggle()
+                    if viewModel.isDiagnosticsVisible {
+                        viewModel.captureDiagnostics()
+                    }
                 } label: {
-                    Label(debugLogStore.isEnabled ? "Debug On" : "Debug", systemImage: "ladybug.fill")
+                    Label(
+                        viewModel.isDiagnosticsVisible ? "Hide Diag" : "Diag",
+                        systemImage: "gauge.with.dots.needle.33percent"
+                    )
                 }
-                .buttonStyle(GlassActionButtonStyle(tint: Color(red: 0.95, green: 0.55, blue: 0.24), isPrimary: false))
+                .buttonStyle(GlassActionButtonStyle(tint: Color(red: 0.58, green: 0.39, blue: 0.87), isPrimary: false))
 
                 Spacer(minLength: 0)
 
@@ -158,41 +173,6 @@ struct MenuBarContentView: View {
                 }
                 .buttonStyle(GlassActionButtonStyle(tint: Color(red: 0.83, green: 0.36, blue: 0.37), isPrimary: false))
                 #endif
-            }
-        }
-    }
-
-    private var debugCard: some View {
-        GlassPanel {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Debug Log")
-                        .font(.system(size: 14, weight: .semibold, design: .rounded))
-                    Spacer(minLength: 0)
-
-                    Button {
-                        debugLogStore.clear()
-                    } label: {
-                        Label("Clear", systemImage: "trash")
-                    }
-                    .buttonStyle(GlassActionButtonStyle(tint: Color(red: 0.84, green: 0.39, blue: 0.40), isPrimary: false))
-                }
-
-                if debugLogStore.entries.isEmpty {
-                    Text("Waiting for events…")
-                        .font(.system(size: 12, weight: .regular, design: .rounded))
-                        .foregroundStyle(.secondary)
-                } else {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 7) {
-                            ForEach(debugLogStore.entries) { entry in
-                                DebugLogRow(entry: entry)
-                            }
-                        }
-                        .padding(.top, 2)
-                    }
-                    .frame(maxHeight: 180)
-                }
             }
         }
     }
@@ -252,29 +232,63 @@ struct MenuBarContentView: View {
     @ViewBuilder
     private var loadedCreditsContent: some View {
         if let bundle = viewModel.creditsBundle, !bundle.isEmpty {
-            VStack(alignment: .leading, spacing: 9) {
-                ForEach(CreditRoleGroup.displayOrder, id: \.rawValue) { group in
-                    let entries = bundle.entries(for: group)
-                    if !entries.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(group.title)
-                                .font(.system(size: 11, weight: .semibold, design: .rounded))
-                                .foregroundStyle(.secondary)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 9) {
+                    ForEach(CreditRoleGroup.displayOrder, id: \.rawValue) { group in
+                        let rows = aggregatedRows(from: bundle.entries(for: group))
+                        if !rows.isEmpty {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(group.title)
+                                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(.secondary)
 
-                            ForEach(entries, id: \.self) { entry in
-                                CreditEntryRow(entry: entry)
+                                ForEach(rows, id: \.id) { row in
+                                    CreditPersonRow(row: row)
+                                }
                             }
                         }
                     }
-                }
 
-                sourceMetadata(bundle: bundle)
+                    sourceMetadata(bundle: bundle)
+                }
+                .padding(.vertical, 1)
             }
+            .frame(minHeight: 190, idealHeight: 280, maxHeight: 340, alignment: .top)
         } else {
             Text("No credits available for this recording.")
                 .font(.system(size: 12, weight: .regular, design: .rounded))
                 .foregroundStyle(.secondary)
         }
+    }
+
+    private func aggregatedRows(from entries: [CreditEntry]) -> [AggregatedCreditRow] {
+        var byPerson: [String: AggregatedCreditBuilder] = [:]
+        var order: [String] = []
+
+        for entry in entries {
+            let key = aggregationKey(for: entry)
+            if byPerson[key] == nil {
+                byPerson[key] = AggregatedCreditBuilder(personName: entry.personName)
+                order.append(key)
+            }
+
+            byPerson[key]?.append(entry)
+        }
+
+        return order.compactMap { key in
+            guard let builder = byPerson[key] else {
+                return nil
+            }
+            return builder.build(id: key)
+        }
+    }
+
+    private func aggregationKey(for entry: CreditEntry) -> String {
+        if let personMBID = entry.personMBID, !personMBID.isEmpty {
+            return personMBID.lowercased()
+        }
+
+        return entry.personName.lowercased()
     }
 
     @ViewBuilder
@@ -378,19 +392,68 @@ private struct LoadingCreditsView: View {
     }
 }
 
-private struct CreditEntryRow: View {
-    let entry: CreditEntry
+private struct AggregatedCreditRow: Hashable {
+    let id: String
+    let personName: String
+    let roles: [String]
+    let scopeLabels: [String]
+}
+
+private struct AggregatedCreditBuilder {
+    let personName: String
+    private(set) var roles: [String] = []
+    private(set) var roleSet: Set<String> = []
+    private(set) var scopeLabels: [String] = []
+    private(set) var scopeSet: Set<String> = []
+
+    mutating func append(_ entry: CreditEntry) {
+        let role = roleLabel(for: entry)
+        if !roleSet.contains(role) {
+            roleSet.insert(role)
+            roles.append(role)
+        }
+
+        let scopeLabel = entry.scope.label
+        if !scopeSet.contains(scopeLabel) {
+            scopeSet.insert(scopeLabel)
+            scopeLabels.append(scopeLabel)
+        }
+    }
+
+    func build(id: String) -> AggregatedCreditRow {
+        AggregatedCreditRow(
+            id: id,
+            personName: personName,
+            roles: roles,
+            scopeLabels: scopeLabels
+        )
+    }
+
+    private func roleLabel(for entry: CreditEntry) -> String {
+        if let instrument = entry.instrument, !instrument.isEmpty {
+            if instrument.localizedCaseInsensitiveCompare(entry.roleRaw) == .orderedSame {
+                return entry.roleRaw
+            }
+            return "\(entry.roleRaw) (\(instrument))"
+        }
+
+        return entry.roleRaw
+    }
+}
+
+private struct CreditPersonRow: View {
+    let row: AggregatedCreditRow
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(entry.personName)
+                Text(row.personName)
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
                     .lineLimit(1)
 
                 Spacer(minLength: 0)
 
-                Text(entry.scope.label)
+                Text(scopeSummary)
                     .font(.system(size: 9, weight: .semibold, design: .rounded))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 6)
@@ -402,67 +465,23 @@ private struct CreditEntryRow: View {
                     )
             }
 
-            Text(subtitle)
-                .font(.system(size: 11, weight: .regular, design: .rounded))
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-        }
-    }
-
-    private var subtitle: String {
-        if let instrument = entry.instrument, !instrument.isEmpty {
-            if instrument.localizedCaseInsensitiveCompare(entry.roleRaw) == .orderedSame {
-                return entry.roleRaw
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(row.roles, id: \.self) { role in
+                    Text("• \(role)")
+                        .font(.system(size: 11, weight: .regular, design: .rounded))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
             }
-            return "\(entry.roleRaw) • \(instrument)"
-        }
-
-        return entry.roleRaw
-    }
-}
-
-private struct DebugLogRow: View {
-    let entry: DebugLogEntry
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 6) {
-                Text(entry.timestamp.formatted(date: .omitted, time: .standard))
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.tertiary)
-
-                Text(entry.category.title)
-                    .font(.system(size: 9, weight: .semibold, design: .rounded))
-                    .foregroundStyle(categoryTint)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
-                    .background(categoryTint.opacity(0.14), in: Capsule())
-            }
-
-            Text(entry.message)
-                .font(.system(size: 11, weight: .regular, design: .rounded))
-                .foregroundStyle(.secondary)
-                .lineLimit(3)
         }
     }
 
-    private var categoryTint: Color {
-        switch entry.category {
-        case .app:
-            return Color(red: 0.51, green: 0.63, blue: 0.95)
-        case .ui:
-            return Color(red: 0.95, green: 0.63, blue: 0.28)
-        case .nowPlaying:
-            return Color(red: 0.20, green: 0.73, blue: 0.52)
-        case .resolver:
-            return Color(red: 0.94, green: 0.46, blue: 0.40)
-        case .provider:
-            return Color(red: 0.48, green: 0.67, blue: 0.95)
-        case .network:
-            return Color(red: 0.28, green: 0.78, blue: 0.84)
-        case .cache:
-            return Color(red: 0.63, green: 0.62, blue: 0.88)
+    private var scopeSummary: String {
+        if row.scopeLabels.count <= 1 {
+            return row.scopeLabels.first ?? "Album-wide"
         }
+
+        return row.scopeLabels.joined(separator: ", ")
     }
 }
 
@@ -574,7 +593,7 @@ private struct PlaceholderStateView: View {
     }
 }
 
-private struct GlassPanel<Content: View>: View {
+struct GlassPanel<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
@@ -608,40 +627,40 @@ private struct GlassActionButtonStyle: ButtonStyle {
             .font(.system(size: 11, weight: .semibold, design: .rounded))
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .background(background(configuration: configuration), in: Capsule())
+            .background(buttonFill(configuration: configuration))
             .overlay(
                 Capsule()
-                    .strokeBorder(.white.opacity(0.28), lineWidth: 0.8)
+                    .strokeBorder(borderColor, lineWidth: 0.8)
             )
-            .foregroundStyle(.white.opacity(isPrimary ? 0.98 : 0.9))
+            .foregroundStyle(isPrimary ? Color.white : tint)
+            .brightness(configuration.isPressed ? -0.08 : 0)
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .animation(.easeOut(duration: 0.14), value: configuration.isPressed)
     }
 
-    private func background(configuration: Configuration) -> some ShapeStyle {
+    @ViewBuilder
+    private func buttonFill(configuration: Configuration) -> some View {
         if isPrimary {
-            return AnyShapeStyle(
+            Capsule()
+                .fill(
                 LinearGradient(
                     colors: [
-                        tint.opacity(configuration.isPressed ? 0.72 : 0.94),
-                        tint.opacity(configuration.isPressed ? 0.58 : 0.78)
+                            tint,
+                            tint
                     ],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
-            )
+                )
+                .shadow(color: tint, radius: configuration.isPressed ? 0 : 4, x: 0, y: 2)
+        } else {
+            Capsule()
+                .fill(.thinMaterial)
         }
+    }
 
-        return AnyShapeStyle(
-            LinearGradient(
-                colors: [
-                    tint.opacity(configuration.isPressed ? 0.34 : 0.44),
-                    tint.opacity(configuration.isPressed ? 0.18 : 0.27)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        )
+    private var borderColor: Color {
+        isPrimary ? Color.white : tint
     }
 }
 
@@ -703,10 +722,7 @@ private struct AmbientGlassBackground: View {
         ),
         at: Date()
     )
-    let debugStore = DebugLogStore()
-    debugStore.setEnabled(true)
-    DebugLogger.log(.app, "Preview debug event")
-    return MenuBarContentView(viewModel: vm, debugLogStore: debugStore)
+    return MenuBarContentView(viewModel: vm)
 }
 
 private actor PreviewProvider: NowPlayingProvider {
