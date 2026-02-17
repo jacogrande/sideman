@@ -17,53 +17,82 @@ actor DefaultCreditsProvider: CreditsProvider {
 
     func lookupCredits(for track: NowPlayingTrack) async -> (CreditsLookupState, CreditsBundle?) {
         let key = Self.cacheKey(for: track)
+        DebugLogger.log(.provider, "lookup start key=\(key)")
 
         if let cached = await cache.get(for: key) {
+            DebugLogger.log(.cache, "cache hit key=\(key) state=\(cached.state)")
             return (cached.state, cached.bundle)
         }
+        DebugLogger.log(.cache, "cache miss key=\(key)")
 
         let resolution = await resolver.resolve(track)
         switch resolution {
         case .failure(.notFound):
             let state: CreditsLookupState = .notFound
+            DebugLogger.log(.provider, "resolver result=notFound key=\(key)")
             await cacheNegativeState(state, key: key)
             return (state, nil)
         case .failure(.ambiguous):
             let state: CreditsLookupState = .ambiguous
+            DebugLogger.log(.provider, "resolver result=ambiguous key=\(key)")
             await cacheNegativeState(state, key: key)
             return (state, nil)
         case .failure(.rateLimited):
+            DebugLogger.log(.provider, "resolver result=rateLimited key=\(key)")
             return (.rateLimited, nil)
         case .failure(.network(let message)):
+            DebugLogger.log(.provider, "resolver result=error key=\(key) message=\(message)")
             return (.error(message), nil)
         case .success(let result):
+            DebugLogger.log(
+                .provider,
+                "resolver result=success recording=\(result.recordingMBID) release=\(result.releaseMBID ?? "nil")"
+            )
             do {
                 let bundle = try await loadCreditsBundle(track: track, resolution: result)
 
                 if bundle.isEmpty {
                     let state: CreditsLookupState = .notFound
+                    DebugLogger.log(.provider, "bundle empty key=\(key)")
                     await cacheNegativeState(state, key: key)
                     return (state, nil)
                 }
 
                 let state: CreditsLookupState = .loaded
+                let summary = CreditRoleGroup.displayOrder
+                    .map { "\($0.rawValue)=\(bundle.entries(for: $0).count)" }
+                    .joined(separator: ", ")
+                DebugLogger.log(.provider, "bundle loaded key=\(key) \(summary)")
                 await cacheSuccess(state: state, bundle: bundle, key: key)
                 return (state, bundle)
             } catch let clientError as MusicBrainzClientError {
                 switch clientError {
                 case .notFound:
                     let state: CreditsLookupState = .notFound
+                    DebugLogger.log(.provider, "lookup client error=notFound key=\(key)")
                     await cacheNegativeState(state, key: key)
                     return (state, nil)
                 case .rateLimited:
+                    DebugLogger.log(.provider, "lookup client error=rateLimited key=\(key)")
                     return (.rateLimited, nil)
                 case .httpStatus, .decoding, .network:
+                    DebugLogger.log(.provider, "lookup client error=\(String(describing: clientError))")
                     return (.error(String(describing: clientError)), nil)
                 }
             } catch {
+                DebugLogger.log(.provider, "lookup error=\(error.localizedDescription)")
                 return (.error(error.localizedDescription), nil)
             }
         }
+    }
+
+    func cacheLookupKey(for track: NowPlayingTrack) async -> String {
+        Self.cacheKey(for: track)
+    }
+
+    func invalidateCachedCredits(for track: NowPlayingTrack) async {
+        let key = Self.cacheKey(for: track)
+        await cache.remove(for: key)
     }
 
     private func loadCreditsBundle(track: NowPlayingTrack, resolution: ResolutionResult) async throws -> CreditsBundle {
@@ -104,7 +133,8 @@ actor DefaultCreditsProvider: CreditsProvider {
         return CreditsBundle(
             entriesByGroup: grouped,
             provenance: provenance,
-            resolvedRecordingMBID: resolution.recordingMBID
+            resolvedRecordingMBID: resolution.recordingMBID,
+            sourceID: resolution.recordingMBID
         )
     }
 
@@ -116,6 +146,7 @@ actor DefaultCreditsProvider: CreditsProvider {
     }
 
     private func cacheSuccess(state: CreditsLookupState, bundle: CreditsBundle, key: String) async {
+        DebugLogger.log(.cache, "cache write success key=\(key) ttl=30d")
         let entry = CachedCredits(
             key: key,
             state: state,
@@ -126,6 +157,7 @@ actor DefaultCreditsProvider: CreditsProvider {
     }
 
     private func cacheNegativeState(_ state: CreditsLookupState, key: String) async {
+        DebugLogger.log(.cache, "cache write negative key=\(key) state=\(state) ttl=24h")
         let entry = CachedCredits(
             key: key,
             state: state,
@@ -141,17 +173,9 @@ actor DefaultCreditsProvider: CreditsProvider {
         }
 
         let components = [track.title, track.artist, track.album]
-            .map(normalize)
+            .map { CreditsTextNormalizer.normalize($0) }
             .joined(separator: "|")
 
         return "meta:\(components)"
-    }
-
-    private static func normalize(_ value: String) -> String {
-        value
-            .lowercased()
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .split(separator: " ")
-            .joined(separator: " ")
     }
 }

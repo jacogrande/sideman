@@ -41,6 +41,8 @@ final class MenuBarViewModel: ObservableObject {
             return
         }
 
+        DebugLogger.log(.nowPlaying, "polling started interval=\(Double(pollingIntervalNanos) / 1_000_000_000.0)s")
+
         pollingTask = Task { [weak self] in
             guard let self else {
                 return
@@ -56,13 +58,15 @@ final class MenuBarViewModel: ObservableObject {
     func stop() {
         pollingTask?.cancel()
         pollingTask = nil
+        DebugLogger.log(.nowPlaying, "polling stopped")
     }
 
-    func refreshOnce() async {
+    func refreshOnce(forceCreditsRefresh: Bool = false) async {
         isLoading = true
         let latest = await provider.fetchSnapshot()
         _ = apply(snapshot: latest, at: Date())
-        await refreshCreditsIfNeeded(for: latest)
+        DebugLogger.log(.nowPlaying, "snapshot updated state=\(snapshotStateLabel(latest.state))")
+        await refreshCreditsIfNeeded(for: latest, forceRefresh: forceCreditsRefresh)
     }
 
     @discardableResult
@@ -78,21 +82,30 @@ final class MenuBarViewModel: ObservableObject {
         return changed
     }
 
-    private func refreshCreditsIfNeeded(for latestSnapshot: PlaybackSnapshot) async {
+    private func refreshCreditsIfNeeded(for latestSnapshot: PlaybackSnapshot, forceRefresh: Bool) async {
         guard let creditsProvider else {
+            DebugLogger.log(.provider, "credits provider unavailable")
             return
         }
 
         guard latestSnapshot.state == .playing, let track = latestSnapshot.track else {
+            DebugLogger.log(.provider, "credits reset: playback not active")
             resetCreditsState()
             return
         }
 
-        let trackKey = DefaultCreditsProvider.cacheKey(for: track)
-        if lastCreditsTrackKey == trackKey {
+        let trackKey = await creditsProvider.cacheLookupKey(for: track)
+        if !forceRefresh, lastCreditsTrackKey == trackKey {
+            DebugLogger.log(.provider, "credits skip: unchanged track key=\(trackKey)")
             return
         }
 
+        if forceRefresh {
+            await creditsProvider.invalidateCachedCredits(for: track)
+            DebugLogger.log(.provider, "credits cache invalidated key=\(trackKey)")
+        }
+
+        DebugLogger.log(.provider, "credits lookup start key=\(trackKey)")
         lastCreditsTrackKey = trackKey
         creditsTask?.cancel()
         creditsState = .resolving
@@ -111,9 +124,11 @@ final class MenuBarViewModel: ObservableObject {
             }
 
             guard self.lastCreditsTrackKey == trackKey else {
+                DebugLogger.log(.provider, "credits discard stale key=\(trackKey)")
                 return
             }
 
+            DebugLogger.log(.provider, "credits lookup complete state=\(state)")
             self.creditsState = state
             self.creditsBundle = bundle
         }
@@ -125,5 +140,18 @@ final class MenuBarViewModel: ObservableObject {
         lastCreditsTrackKey = nil
         creditsState = .idle
         creditsBundle = nil
+    }
+
+    private func snapshotStateLabel(_ state: PlaybackState) -> String {
+        switch state {
+        case .playing:
+            return "playing"
+        case .paused:
+            return "paused"
+        case .notRunning:
+            return "not_running"
+        case .unknown:
+            return "unknown"
+        }
     }
 }

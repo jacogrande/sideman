@@ -5,6 +5,7 @@ import AppKit
 
 struct MenuBarContentView: View {
     @ObservedObject var viewModel: MenuBarViewModel
+    @ObservedObject var debugLogStore: DebugLogStore
 
     private var status: StatusPresentation {
         switch viewModel.snapshot.state {
@@ -27,6 +28,9 @@ struct MenuBarContentView: View {
                 header
                 contentCard
                 creditsCard
+                if debugLogStore.isEnabled {
+                    debugCard
+                }
                 footer
             }
             .padding(14)
@@ -120,8 +124,9 @@ struct MenuBarContentView: View {
 
             HStack(spacing: 8) {
                 Button {
+                    DebugLogger.log(.ui, "manual refresh requested")
                     Task {
-                        await viewModel.refreshOnce()
+                        await viewModel.refreshOnce(forceCreditsRefresh: true)
                     }
                 } label: {
                     Label("Refresh", systemImage: "arrow.clockwise")
@@ -135,6 +140,14 @@ struct MenuBarContentView: View {
                 }
                 .buttonStyle(GlassActionButtonStyle(tint: Color(red: 0.30, green: 0.72, blue: 0.55), isPrimary: false))
 
+                Button {
+                    let nextValue = !debugLogStore.isEnabled
+                    debugLogStore.setEnabled(nextValue)
+                } label: {
+                    Label(debugLogStore.isEnabled ? "Debug On" : "Debug", systemImage: "ladybug.fill")
+                }
+                .buttonStyle(GlassActionButtonStyle(tint: Color(red: 0.95, green: 0.55, blue: 0.24), isPrimary: false))
+
                 Spacer(minLength: 0)
 
                 #if canImport(AppKit)
@@ -145,6 +158,41 @@ struct MenuBarContentView: View {
                 }
                 .buttonStyle(GlassActionButtonStyle(tint: Color(red: 0.83, green: 0.36, blue: 0.37), isPrimary: false))
                 #endif
+            }
+        }
+    }
+
+    private var debugCard: some View {
+        GlassPanel {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Debug Log")
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    Spacer(minLength: 0)
+
+                    Button {
+                        debugLogStore.clear()
+                    } label: {
+                        Label("Clear", systemImage: "trash")
+                    }
+                    .buttonStyle(GlassActionButtonStyle(tint: Color(red: 0.84, green: 0.39, blue: 0.40), isPrimary: false))
+                }
+
+                if debugLogStore.entries.isEmpty {
+                    Text("Waiting for events…")
+                        .font(.system(size: 12, weight: .regular, design: .rounded))
+                        .foregroundStyle(.secondary)
+                } else {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 7) {
+                            ForEach(debugLogStore.entries) { entry in
+                                DebugLogRow(entry: entry)
+                            }
+                        }
+                        .padding(.top, 2)
+                    }
+                    .frame(maxHeight: 180)
+                }
             }
         }
     }
@@ -168,10 +216,10 @@ struct MenuBarContentView: View {
                         .foregroundStyle(.secondary)
 
                 case .resolving:
-                    LoadingCreditsView(message: "Resolving recording match…")
+                    LoadingCreditsView(message: "Resolving source page…")
 
                 case .loadingCredits:
-                    LoadingCreditsView(message: "Loading credits from MusicBrainz…")
+                    LoadingCreditsView(message: "Loading credits from Wikipedia…")
 
                 case .notFound:
                     Text("No credits found for this track.")
@@ -184,7 +232,7 @@ struct MenuBarContentView: View {
                         .foregroundStyle(.secondary)
 
                 case .rateLimited:
-                    Text("MusicBrainz rate limit reached. Try again in a moment.")
+                    Text("Wikipedia rate limit reached. Try again in a moment.")
                         .font(.system(size: 12, weight: .regular, design: .rounded))
                         .foregroundStyle(.secondary)
 
@@ -219,12 +267,64 @@ struct MenuBarContentView: View {
                         }
                     }
                 }
+
+                sourceMetadata(bundle: bundle)
             }
         } else {
             Text("No credits available for this recording.")
                 .font(.system(size: 12, weight: .regular, design: .rounded))
                 .foregroundStyle(.secondary)
         }
+    }
+
+    @ViewBuilder
+    private func sourceMetadata(bundle: CreditsBundle) -> some View {
+        let hasSourceMetadata =
+            bundle.sourceName != nil ||
+            bundle.sourcePageTitle != nil ||
+            bundle.sourcePageURL != nil ||
+            bundle.sourceAttribution != nil ||
+            bundle.matchedTrackNumber != nil
+
+        if hasSourceMetadata {
+            Divider()
+                .overlay(.white.opacity(0.08))
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(sourceHeaderText(bundle: bundle))
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
+
+                if let sourceURLString = bundle.sourcePageURL,
+                   let sourceURL = URL(string: sourceURLString) {
+                    Link(bundle.sourcePageTitle ?? "Open source page", destination: sourceURL)
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color(red: 0.36, green: 0.72, blue: 0.96))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                } else if let sourcePageTitle = bundle.sourcePageTitle {
+                    Text(sourcePageTitle)
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .lineLimit(1)
+                }
+
+                if let attribution = bundle.sourceAttribution {
+                    Text(attribution)
+                        .font(.system(size: 10, weight: .regular, design: .rounded))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(2)
+                }
+            }
+        }
+    }
+
+    private func sourceHeaderText(bundle: CreditsBundle) -> String {
+        let sourceName = bundle.sourceName ?? "Source"
+        if let trackNumber = bundle.matchedTrackNumber {
+            return "\(sourceName) • matched track \(trackNumber)"
+        }
+
+        return sourceName
     }
 
     private var creditsStateLabel: String {
@@ -252,11 +352,13 @@ struct MenuBarContentView: View {
         #if canImport(AppKit)
         if let id = viewModel.snapshot.track?.id, let trackURL = URL(string: id) {
             _ = NSWorkspace.shared.open(trackURL)
+            DebugLogger.log(.ui, "openSpotify track url=\(id)")
             return
         }
 
         if let appURL = URL(string: "spotify:") {
             _ = NSWorkspace.shared.open(appURL)
+            DebugLogger.log(.ui, "openSpotify app url=spotify:")
         }
         #endif
     }
@@ -288,7 +390,7 @@ private struct CreditEntryRow: View {
 
                 Spacer(minLength: 0)
 
-                Text(entry.sourceLevel.badgeTitle)
+                Text(entry.scope.label)
                     .font(.system(size: 9, weight: .semibold, design: .rounded))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 6)
@@ -309,10 +411,58 @@ private struct CreditEntryRow: View {
 
     private var subtitle: String {
         if let instrument = entry.instrument, !instrument.isEmpty {
+            if instrument.localizedCaseInsensitiveCompare(entry.roleRaw) == .orderedSame {
+                return entry.roleRaw
+            }
             return "\(entry.roleRaw) • \(instrument)"
         }
 
         return entry.roleRaw
+    }
+}
+
+private struct DebugLogRow: View {
+    let entry: DebugLogEntry
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                Text(entry.timestamp.formatted(date: .omitted, time: .standard))
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+
+                Text(entry.category.title)
+                    .font(.system(size: 9, weight: .semibold, design: .rounded))
+                    .foregroundStyle(categoryTint)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(categoryTint.opacity(0.14), in: Capsule())
+            }
+
+            Text(entry.message)
+                .font(.system(size: 11, weight: .regular, design: .rounded))
+                .foregroundStyle(.secondary)
+                .lineLimit(3)
+        }
+    }
+
+    private var categoryTint: Color {
+        switch entry.category {
+        case .app:
+            return Color(red: 0.51, green: 0.63, blue: 0.95)
+        case .ui:
+            return Color(red: 0.95, green: 0.63, blue: 0.28)
+        case .nowPlaying:
+            return Color(red: 0.20, green: 0.73, blue: 0.52)
+        case .resolver:
+            return Color(red: 0.94, green: 0.46, blue: 0.40)
+        case .provider:
+            return Color(red: 0.48, green: 0.67, blue: 0.95)
+        case .network:
+            return Color(red: 0.28, green: 0.78, blue: 0.84)
+        case .cache:
+            return Color(red: 0.63, green: 0.62, blue: 0.88)
+        }
     }
 }
 
@@ -553,7 +703,10 @@ private struct AmbientGlassBackground: View {
         ),
         at: Date()
     )
-    return MenuBarContentView(viewModel: vm)
+    let debugStore = DebugLogStore()
+    debugStore.setEnabled(true)
+    DebugLogger.log(.app, "Preview debug event")
+    return MenuBarContentView(viewModel: vm, debugLogStore: debugStore)
 }
 
 private actor PreviewProvider: NowPlayingProvider {

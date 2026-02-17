@@ -171,4 +171,8 @@ private actor StubCreditsCache: CreditsCache {
     func set(_ value: CachedCredits, for key: String) async {
         values[key] = value
     }
+
+    func remove(for key: String) async {
+        values.removeValue(forKey: key)
+    }
 }

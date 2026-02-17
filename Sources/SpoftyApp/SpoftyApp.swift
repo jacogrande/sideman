@@ -3,17 +3,16 @@ import SwiftUI
 @main
 struct SpoftyApp: App {
     @StateObject private var viewModel: MenuBarViewModel
+    @StateObject private var debugLogStore: DebugLogStore
 
     init() {
         let nowPlayingProvider = SpotifyAppleScriptNowPlayingProvider()
-        let musicBrainzClient = MusicBrainzHTTPClient()
-        let trackResolver = DefaultTrackResolver(client: musicBrainzClient)
         let creditsCache = MemoryDiskCreditsCache()
-        let creditsProvider = DefaultCreditsProvider(
-            resolver: trackResolver,
-            client: musicBrainzClient,
-            cache: creditsCache
-        )
+        let backend = CreditsBackend.fromEnvironment()
+        let creditsProvider = CreditsProviderFactory.makeProvider(backend: backend, cache: creditsCache)
+        let debugStore = DebugLogStore()
+
+        DebugLogger.log(.app, "credits backend=\(backend.rawValue)")
 
         _viewModel = StateObject(
             wrappedValue: MenuBarViewModel(
@@ -21,11 +20,12 @@ struct SpoftyApp: App {
                 creditsProvider: creditsProvider
             )
         )
+        _debugLogStore = StateObject(wrappedValue: debugStore)
     }
 
     var body: some Scene {
         MenuBarExtra("Spofty", systemImage: "music.note") {
-            MenuBarContentView(viewModel: viewModel)
+            MenuBarContentView(viewModel: viewModel, debugLogStore: debugLogStore)
         }
         .menuBarExtraStyle(.window)
     }

@@ -23,6 +23,11 @@ actor MusicBrainzHTTPClient: MusicBrainzClient {
     }
 
     func searchRecordings(query: RecordingQuery) async throws -> [RecordingCandidate] {
+        DebugLogger.log(
+            .network,
+            "searchRecordings title='\(query.title)' artist='\(query.artist)' album='\(query.album)'"
+        )
+
         let queryString = buildQuery(title: query.title, artist: query.artist, album: query.album)
         let endpoint = Endpoint(
             path: "recording",
@@ -34,6 +39,7 @@ actor MusicBrainzHTTPClient: MusicBrainzClient {
         )
 
         let payload: RecordingSearchResponseDTO = try await request(endpoint: endpoint)
+        DebugLogger.log(.network, "searchRecordings returned \(payload.recordings.count) candidates")
 
         return payload.recordings.map {
             RecordingCandidate(
@@ -48,6 +54,7 @@ actor MusicBrainzHTTPClient: MusicBrainzClient {
     }
 
     func getRecording(id: String) async throws -> MBRecordingDetail {
+        DebugLogger.log(.network, "getRecording id=\(id)")
         let endpoint = Endpoint(
             path: "recording/\(id)",
             queryItems: [
@@ -67,6 +74,7 @@ actor MusicBrainzHTTPClient: MusicBrainzClient {
     }
 
     func getWork(id: String) async throws -> MBWorkDetail {
+        DebugLogger.log(.network, "getWork id=\(id)")
         let endpoint = Endpoint(
             path: "work/\(id)",
             queryItems: [
@@ -85,6 +93,7 @@ actor MusicBrainzHTTPClient: MusicBrainzClient {
     }
 
     func getRelease(id: String) async throws -> MBReleaseDetail {
+        DebugLogger.log(.network, "getRelease id=\(id)")
         let endpoint = Endpoint(
             path: "release/\(id)",
             queryItems: [
@@ -105,7 +114,10 @@ actor MusicBrainzHTTPClient: MusicBrainzClient {
     private func request<T: Decodable>(endpoint: Endpoint, attempt: Int = 0) async throws -> T {
         await paceRequests()
 
-        var urlRequest = URLRequest(url: endpoint.url(relativeTo: baseURL))
+        let url = endpoint.url(relativeTo: baseURL)
+        DebugLogger.log(.network, "request \(url.absoluteString) attempt=\(attempt + 1)")
+
+        var urlRequest = URLRequest(url: url)
         urlRequest.timeoutInterval = requestTimeout
         urlRequest.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         urlRequest.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -124,24 +136,31 @@ actor MusicBrainzHTTPClient: MusicBrainzClient {
 
         switch http.statusCode {
         case 200:
+            DebugLogger.log(.network, "response 200 for \(url.path)")
             do {
                 return try JSONDecoder().decode(T.self, from: data)
             } catch {
+                DebugLogger.log(.network, "decode failure for \(url.path): \(error.localizedDescription)")
                 throw MusicBrainzClientError.decoding(error.localizedDescription)
             }
         case 404:
+            DebugLogger.log(.network, "response 404 for \(url.path)")
             throw MusicBrainzClientError.notFound
         case 429, 503:
             if attempt < 3 {
                 let retryDelay = retryDelay(for: http, attempt: attempt)
+                DebugLogger.log(.network, "response \(http.statusCode) retrying in \(String(format: "%.2f", retryDelay))s for \(url.path)")
                 try? await Task.sleep(nanoseconds: UInt64(retryDelay * 1_000_000_000))
                 return try await request(endpoint: endpoint, attempt: attempt + 1)
             }
             if http.statusCode == 429 {
+                DebugLogger.log(.network, "response 429 rate limited for \(url.path)")
                 throw MusicBrainzClientError.rateLimited
             }
+            DebugLogger.log(.network, "response \(http.statusCode) for \(url.path)")
             throw MusicBrainzClientError.httpStatus(http.statusCode)
         default:
+            DebugLogger.log(.network, "response \(http.statusCode) for \(url.path)")
             throw MusicBrainzClientError.httpStatus(http.statusCode)
         }
     }

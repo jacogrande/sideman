@@ -4,6 +4,9 @@ actor DefaultTrackResolver: TrackResolver {
     private let client: MusicBrainzClient
     private let confidenceThreshold: Double
     private let minimumMargin: Double
+    private let normalizationOptions: TextNormalizationOptions = [.stripFeaturingSuffix, .alphanumericsOnly, .collapseWhitespace]
+    // Track resolver intentionally favors substring matches slightly more to handle release title variants.
+    private let containsMatchScore: Double = 0.88
 
     init(client: MusicBrainzClient, confidenceThreshold: Double = 0.78, minimumMargin: Double = 0.10) {
         self.client = client
@@ -12,16 +15,21 @@ actor DefaultTrackResolver: TrackResolver {
     }
 
     func resolve(_ track: NowPlayingTrack) async -> Result<ResolutionResult, ResolverError> {
+        DebugLogger.log(.resolver, "resolve start '\(track.title)' by '\(track.artist)' [album='\(track.album)']")
+
         do {
             let primaryQuery = RecordingQuery(title: track.title, artist: track.artist, album: track.album)
             var candidates = try await client.searchRecordings(query: primaryQuery)
+            DebugLogger.log(.resolver, "primary query candidates=\(candidates.count)")
 
             if candidates.isEmpty, !track.album.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 let fallbackQuery = RecordingQuery(title: track.title, artist: track.artist, album: "")
                 candidates = try await client.searchRecordings(query: fallbackQuery)
+                DebugLogger.log(.resolver, "fallback query candidates=\(candidates.count)")
             }
 
             guard !candidates.isEmpty else {
+                DebugLogger.log(.resolver, "resolve result=notFound")
                 return .failure(.notFound)
             }
 
@@ -36,104 +44,84 @@ actor DefaultTrackResolver: TrackResolver {
 
             let secondScore = scored.dropFirst().first?.score ?? 0
             let margin = best.score - secondScore
+            DebugLogger.log(
+                .resolver,
+                "top candidate id=\(best.candidate.recordingMBID) score=\(String(format: "%.3f", best.score)) margin=\(String(format: "%.3f", margin))"
+            )
 
             guard best.score >= confidenceThreshold, margin >= minimumMargin else {
+                DebugLogger.log(
+                    .resolver,
+                    "resolve result=ambiguous (threshold=\(String(format: "%.2f", confidenceThreshold)) marginMin=\(String(format: "%.2f", minimumMargin)))"
+                )
                 return .failure(.ambiguous)
             }
 
             let releaseMBID = selectReleaseID(from: best.candidate, album: track.album)
 
+            let success = ResolutionResult(
+                recordingMBID: best.candidate.recordingMBID,
+                releaseMBID: releaseMBID,
+                workMBIDs: [],
+                confidence: best.score
+            )
+
+            DebugLogger.log(
+                .resolver,
+                "resolve result=success recording=\(success.recordingMBID) release=\(success.releaseMBID ?? "nil")"
+            )
+
             return .success(
                 ResolutionResult(
-                    recordingMBID: best.candidate.recordingMBID,
-                    releaseMBID: releaseMBID,
-                    workMBIDs: [],
-                    confidence: best.score
+                    recordingMBID: success.recordingMBID,
+                    releaseMBID: success.releaseMBID,
+                    workMBIDs: success.workMBIDs,
+                    confidence: success.confidence
                 )
             )
         } catch let clientError as MusicBrainzClientError {
             switch clientError {
             case .notFound:
+                DebugLogger.log(.resolver, "resolve client error=notFound")
                 return .failure(.notFound)
             case .rateLimited:
+                DebugLogger.log(.resolver, "resolve client error=rateLimited")
                 return .failure(.rateLimited)
             case .httpStatus, .decoding, .network:
+                DebugLogger.log(.resolver, "resolve client error=\(String(describing: clientError))")
                 return .failure(.network(String(describing: clientError)))
             }
         } catch {
+            DebugLogger.log(.resolver, "resolve error=\(error.localizedDescription)")
             return .failure(.network(error.localizedDescription))
         }
     }
 
     private func score(candidate: RecordingCandidate, track: NowPlayingTrack) -> Double {
         let mbScore = min(max(Double(candidate.musicBrainzScore) / 100.0, 0), 1)
-        let titleScore = similarity(candidate.title, track.title)
+        let titleScore = similarityScore(candidate.title, track.title)
 
         let candidateArtist = candidate.artistNames.joined(separator: " ")
-        let artistScore = similarity(candidateArtist, track.artist)
+        let artistScore = similarityScore(candidateArtist, track.artist)
 
         let albumScore: Double
         if track.album.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             albumScore = 0.6
         } else {
-            albumScore = candidate.releaseTitles.map { similarity($0, track.album) }.max() ?? 0
+            albumScore = candidate.releaseTitles.map { similarityScore($0, track.album) }.max() ?? 0
         }
 
         return (0.45 * mbScore) + (0.30 * titleScore) + (0.20 * artistScore) + (0.05 * albumScore)
     }
 
-    private func similarity(_ lhs: String, _ rhs: String) -> Double {
-        let a = normalize(lhs)
-        let b = normalize(rhs)
-
-        guard !a.isEmpty, !b.isEmpty else {
-            return 0
-        }
-
-        if a == b {
-            return 1
-        }
-
-        if a.contains(b) || b.contains(a) {
-            return 0.88
-        }
-
-        let leftTokens = Set(a.split(separator: " ").map(String.init))
-        let rightTokens = Set(b.split(separator: " ").map(String.init))
-
-        guard !leftTokens.isEmpty, !rightTokens.isEmpty else {
-            return 0
-        }
-
-        let intersection = leftTokens.intersection(rightTokens).count
-        let union = leftTokens.union(rightTokens).count
-
-        guard union > 0 else {
-            return 0
-        }
-
-        return Double(intersection) / Double(union)
-    }
-
-    private func normalize(_ value: String) -> String {
-        var cleaned = value.lowercased()
-        if let range = cleaned.range(of: #"\b(feat\.?|featuring)\b.*$"#, options: .regularExpression) {
-            cleaned.removeSubrange(range)
-        }
-
-        let scalarView = cleaned.unicodeScalars.map { scalar -> Character in
-            if CharacterSet.alphanumerics.contains(scalar) {
-                return Character(scalar)
-            }
-            return " "
-        }
-
-        let normalized = String(scalarView)
-            .split(separator: " ")
-            .map(String.init)
-            .joined(separator: " ")
-
-        return normalized
+    private func similarityScore(_ lhs: String, _ rhs: String) -> Double {
+        let normalizedLeft = CreditsTextNormalizer.normalize(lhs, options: normalizationOptions)
+        let normalizedRight = CreditsTextNormalizer.normalize(rhs, options: normalizationOptions)
+        return CreditsTextSimilarity.jaccardSimilarity(
+            normalizedLeft,
+            normalizedRight,
+            containsMatchScore: containsMatchScore
+        )
     }
 
     private func selectReleaseID(from candidate: RecordingCandidate, album: String) -> String? {
@@ -147,7 +135,7 @@ actor DefaultTrackResolver: TrackResolver {
 
         let paired = zip(candidate.releaseIDs, candidate.releaseTitles)
         let best = paired.max { lhs, rhs in
-            similarity(lhs.1, album) < similarity(rhs.1, album)
+            similarityScore(lhs.1, album) < similarityScore(rhs.1, album)
         }
 
         return best?.0 ?? candidate.releaseIDs.first

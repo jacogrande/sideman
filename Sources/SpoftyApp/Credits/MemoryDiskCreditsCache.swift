@@ -16,12 +16,29 @@ actor MemoryDiskCreditsCache: CreditsCache {
     func get(for key: String) async -> CachedCredits? {
         await loadFromDiskIfNeeded()
         purgeExpiredIfNeeded()
-        return entries[key]
+        if let value = entries[key] {
+            DebugLogger.log(.cache, "cache get hit key=\(key) state=\(value.state)")
+            return value
+        }
+
+        DebugLogger.log(.cache, "cache get miss key=\(key)")
+        return nil
     }
 
     func set(_ value: CachedCredits, for key: String) async {
         await loadFromDiskIfNeeded()
         entries[key] = value
+        DebugLogger.log(.cache, "cache set key=\(key) state=\(value.state)")
+        persist()
+    }
+
+    func remove(for key: String) async {
+        await loadFromDiskIfNeeded()
+        guard entries.removeValue(forKey: key) != nil else {
+            return
+        }
+
+        DebugLogger.log(.cache, "cache remove key=\(key)")
         persist()
     }
 
@@ -40,8 +57,10 @@ actor MemoryDiskCreditsCache: CreditsCache {
             let data = try Data(contentsOf: fileURL)
             let payload = try decoder.decode(CachePayload.self, from: data)
             entries = payload.entries
+            DebugLogger.log(.cache, "cache disk load entries=\(entries.count)")
         } catch {
             entries = [:]
+            DebugLogger.log(.cache, "cache disk load failed; starting empty")
         }
     }
 
@@ -51,6 +70,7 @@ actor MemoryDiskCreditsCache: CreditsCache {
         entries = entries.filter { $0.value.expiresAt > now }
 
         if entries.count != originalCount {
+            DebugLogger.log(.cache, "cache purged expired entries removed=\(originalCount - entries.count)")
             persist()
         }
     }
@@ -62,8 +82,10 @@ actor MemoryDiskCreditsCache: CreditsCache {
             let payload = CachePayload(entries: entries)
             let data = try encoder.encode(payload)
             try data.write(to: fileURL, options: .atomic)
+            DebugLogger.log(.cache, "cache persisted entries=\(entries.count)")
         } catch {
             // Ignore cache persistence failures.
+            DebugLogger.log(.cache, "cache persist failed")
         }
     }
 

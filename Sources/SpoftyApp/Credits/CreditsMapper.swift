@@ -59,6 +59,30 @@ enum CreditsMapper {
         }
     }
 
+    static func mergeDeduplicating(_ entries: [CreditEntry]) -> [CreditEntry] {
+        var seen = Set<String>()
+        var deduped: [CreditEntry] = []
+
+        for entry in entries {
+            let key = dedupeKey(for: entry)
+            if seen.contains(key) {
+                continue
+            }
+            seen.insert(key)
+            deduped.append(entry)
+        }
+
+        return deduped.sorted { lhs, rhs in
+            if lhs.roleGroup != rhs.roleGroup {
+                return lhs.roleGroup.title < rhs.roleGroup.title
+            }
+            if lhs.personName != rhs.personName {
+                return lhs.personName.localizedCaseInsensitiveCompare(rhs.personName) == .orderedAscending
+            }
+            return lhs.roleRaw.localizedCaseInsensitiveCompare(rhs.roleRaw) == .orderedAscending
+        }
+    }
+
     static func group(_ entries: [CreditEntry]) -> [CreditRoleGroup: [CreditEntry]] {
         var grouped: [CreditRoleGroup: [CreditEntry]] = [:]
         for group in CreditRoleGroup.displayOrder {
@@ -81,11 +105,15 @@ enum CreditsMapper {
         return grouped
     }
 
+    static func roleGroup(forRoleText value: String) -> CreditRoleGroup {
+        roleGroup(for: value, attributes: [])
+    }
+
     private static func dedupeKey(for entry: CreditEntry) -> String {
         let person = (entry.personMBID ?? entry.personName).lowercased()
         let role = entry.roleRaw.lowercased()
         let instrument = (entry.instrument ?? "").lowercased()
-        return "\(person)|\(entry.roleGroup.rawValue)|\(role)|\(instrument)"
+        return "\(person)|\(entry.roleGroup.rawValue)|\(role)|\(instrument)|\(entry.scope)"
     }
 
     private static func rawRole(type: String, attributes: [String]) -> String {
@@ -119,19 +147,19 @@ enum CreditsMapper {
     private static func roleGroup(for type: String, attributes: [String]) -> CreditRoleGroup {
         let full = ([type] + attributes).joined(separator: " ").lowercased()
 
-        if containsAny(full, ["composer", "lyricist", "writer", "songwriter", "librettist", "author"]) {
+        if containsAny(full, ["composer", "lyricist", "writer", "songwriter", "librettist", "author", "arranger", "orchestrator"]) {
             return .writing
         }
 
-        if containsAny(full, ["producer", "co-producer", "executive producer", "production"]) {
+        if containsAny(full, ["producer", "co-producer", "executive producer", "production", "programming", "programmer", "beatmaker"]) {
             return .production
         }
 
-        if containsAny(full, ["engineer", "mix", "mastering", "recording", "assistant engineer"]) {
+        if containsAny(full, ["engineer", "mix", "mastering", "recording", "assistant engineer", "audio editing", "editing"]) {
             return .engineering
         }
 
-        if containsAny(full, ["perform", "instrument", "vocal", "guitar", "drum", "bass", "piano", "sax", "violin", "synth"]) {
+        if containsAny(full, ["perform", "instrument", "vocal", "guitar", "drum", "drums", "bass", "piano", "sax", "violin", "synth", "keyboard", "keyboards", "percussion", "flute", "cello", "mandolin", "banjo", "marimba", "glockenspiel", "trumpet", "trombone", "clarinet", "conductor"]) {
             return .musicians
         }
 

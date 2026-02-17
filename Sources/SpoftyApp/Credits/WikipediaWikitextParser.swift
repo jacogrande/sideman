@@ -1,0 +1,420 @@
+import Foundation
+
+struct DefaultWikipediaWikitextParser: WikipediaWikitextParser {
+    private let attribution = "Wikipedia contributors (CC BY-SA)"
+    private let trackTitleNormalizationOptions: TextNormalizationOptions = [.stripFeaturingSuffix, .alphanumericsOnly, .collapseWhitespace]
+    // Track title matching stays slightly stricter to avoid false positives from noisy wikitext rows.
+    private let trackTitleContainsMatchScore: Double = 0.86
+
+    private static let lineItemPrefixRegex = makeRegex(#"^[\*#;:]+\s*"#)
+    private static let scopeRegex = makeRegex(#"\(([^\)]*track[^\)]*)\)"#, options: [.caseInsensitive])
+    private static let trackRangeRegex = makeRegex(#"(\d+)\s*[-–]\s*(\d+)"#)
+    private static let trackNumberRegex = makeRegex(#"\b(\d+)\b"#)
+    private static let numberedTrackRegexes: [NSRegularExpression] = [
+        makeRegex(#"\|\s*(\d+)\.?\s*\|?\s*\"([^\"]+)\""#, options: [.caseInsensitive]),
+        makeRegex(#"\|\s*(\d+)\.?\s*\|?\s*''\[\[[^\]|]+\|([^\]]+)\]\]''"#, options: [.caseInsensitive]),
+        makeRegex(#"\|\s*(\d+)\.\s*([^\|]+)$"#, options: [.caseInsensitive])
+    ]
+    private static let templateTrackTitleRegex = makeRegex(
+        #"^\|\s*title\s*(\d+)\s*=\s*(.+)$"#,
+        options: [.caseInsensitive]
+    )
+    private static let quotedTitleRegex = makeRegex(#"\"([^\"]+)\""#)
+    private static let listIndexPrefixRegex = makeRegex(#"^#+\s*"#)
+    private static let headingRegex = makeRegex(#"(?m)^==+\s*([^=\n]+?)\s*==+\s*$"#)
+
+    private static func makeRegex(_ pattern: String, options: NSRegularExpression.Options = []) -> NSRegularExpression {
+        // Patterns are compile-time constants. Fail fast if one becomes invalid.
+        try! NSRegularExpression(pattern: pattern, options: options)
+    }
+
+    func parse(page: WikipediaPageContent, for track: NowPlayingTrack) -> WikipediaParsedCredits {
+        let normalized = sanitizeWikitext(page.wikitext)
+        let trackListing = extractSection(matchingAny: ["track listing"], in: normalized)
+        let trackMap = parseTrackListing(from: trackListing ?? "")
+        let matchedTrack = resolveTrackNumber(for: track.title, using: trackMap)
+
+        DebugLogger.log(
+            .provider,
+            "wikipedia parse page='\(page.title)' trackMatch=\(matchedTrack.map(String.init) ?? "nil") parsedTrackRows=\(trackMap.count)"
+        )
+
+        guard let personnelSection = extractSection(
+            matchingAny: ["personnel", "personnel and credits", "credits"],
+            in: normalized
+        ) else {
+            DebugLogger.log(.provider, "wikipedia parse no personnel section found")
+            return WikipediaParsedCredits(entries: [], matchedTrackNumber: matchedTrack)
+        }
+
+        let rawEntries = parsePersonnelEntries(from: personnelSection, page: page)
+        let deduped = CreditsMapper.mergeDeduplicating(rawEntries)
+
+        let filtered: [CreditEntry]
+        if let matchedTrack {
+            filtered = deduped.filter { $0.scope.applies(to: matchedTrack) }
+        } else {
+            filtered = deduped
+        }
+
+        DebugLogger.log(.provider, "wikipedia parse entries raw=\(rawEntries.count) deduped=\(deduped.count) filtered=\(filtered.count)")
+
+        return WikipediaParsedCredits(entries: filtered, matchedTrackNumber: matchedTrack)
+    }
+
+    private func parsePersonnelEntries(from section: String, page: WikipediaPageContent) -> [CreditEntry] {
+        let lines = section
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        var entries: [CreditEntry] = []
+
+        for line in lines {
+            guard line.hasPrefix("*") || line.hasPrefix("#") || line.hasPrefix(":") || line.hasPrefix(";") else {
+                continue
+            }
+
+            let item = stripLineItemPrefix(from: line)
+            guard let split = splitPersonnelItem(item) else {
+                continue
+            }
+
+            let cleanedName = cleanupWikiMarkup(split.name)
+            var roleText = cleanupWikiMarkup(split.role)
+            let scope = extractScope(from: &roleText)
+
+            let roles = splitRoles(roleText)
+            for role in roles {
+                let roleGroup = CreditsMapper.roleGroup(forRoleText: role)
+                let instrument = inferInstrument(role: role, roleGroup: roleGroup)
+                let sourceLevel: CreditSourceLevel = (scope == .albumWide) ? .release : .recording
+
+                let entry = CreditEntry(
+                    personName: cleanedName,
+                    roleRaw: role,
+                    roleGroup: roleGroup,
+                    sourceLevel: sourceLevel,
+                    instrument: instrument,
+                    source: .wikipedia,
+                    scope: scope,
+                    sourceURL: page.fullURL,
+                    sourceAttribution: attribution
+                )
+                entries.append(entry)
+            }
+        }
+
+        return entries
+    }
+
+    private func splitPersonnelItem(_ line: String) -> (name: String, role: String)? {
+        let delimiters = [" – ", " — ", " - ", " : ", ": "]
+
+        for delimiter in delimiters {
+            if let range = line.range(of: delimiter) {
+                let name = String(line[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+                let role = String(line[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+
+                if !name.isEmpty, !role.isEmpty {
+                    return (name, role)
+                }
+            }
+        }
+
+        return nil
+    }
+
+    private func splitRoles(_ roleText: String) -> [String] {
+        let prepared = roleText
+            .replacingOccurrences(of: " and ", with: ", ")
+            .replacingOccurrences(of: ";", with: ",")
+
+        let parts = prepared
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        if parts.isEmpty {
+            return [roleText.trimmingCharacters(in: .whitespacesAndNewlines)]
+        }
+
+        return parts
+    }
+
+    private func stripLineItemPrefix(from line: String) -> String {
+        let nsRange = NSRange(line.startIndex..., in: line)
+        return Self.lineItemPrefixRegex.stringByReplacingMatches(in: line, options: [], range: nsRange, withTemplate: "")
+    }
+
+    private func extractScope(from roleText: inout String) -> CreditScope {
+        let range = NSRange(roleText.startIndex..., in: roleText)
+
+        guard let match = Self.scopeRegex.firstMatch(in: roleText, options: [], range: range),
+              let fullRange = Range(match.range(at: 0), in: roleText),
+              let scopeRange = Range(match.range(at: 1), in: roleText) else {
+            return .albumWide
+        }
+
+        let scopeText = roleText[scopeRange].lowercased()
+        roleText.removeSubrange(fullRange)
+        roleText = roleText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if scopeText.contains("all tracks except") {
+            return .trackUnknown
+        }
+
+        if scopeText.contains("all tracks") {
+            return .albumWide
+        }
+
+        let parsed = parseTrackReferences(from: scopeText)
+        if let range = parsed.range, parsed.explicitTracks.isEmpty {
+            return .trackRange(range.lowerBound, range.upperBound)
+        }
+
+        if !parsed.allTracks.isEmpty {
+            return .trackSpecific(Array(parsed.allTracks).sorted())
+        }
+
+        return .trackUnknown
+    }
+
+    private func parseTrackReferences(from value: String) -> (allTracks: Set<Int>, explicitTracks: Set<Int>, range: ClosedRange<Int>?) {
+        var tracks = Set<Int>()
+        var explicit = Set<Int>()
+        var onlyRange: ClosedRange<Int>?
+        let nsRange = NSRange(value.startIndex..., in: value)
+
+        for match in Self.trackRangeRegex.matches(in: value, range: nsRange) {
+            guard let leftRange = Range(match.range(at: 1), in: value),
+                  let rightRange = Range(match.range(at: 2), in: value),
+                  let left = Int(value[leftRange]),
+                  let right = Int(value[rightRange]) else {
+                continue
+            }
+
+            let start = min(left, right)
+            let end = max(left, right)
+            onlyRange = start...end
+            for index in start...end {
+                tracks.insert(index)
+            }
+        }
+
+        for match in Self.trackNumberRegex.matches(in: value, range: nsRange) {
+            guard let numberRange = Range(match.range(at: 1), in: value),
+                  let number = Int(value[numberRange]) else {
+                continue
+            }
+
+            tracks.insert(number)
+            explicit.insert(number)
+        }
+
+        return (tracks, explicit, onlyRange)
+    }
+
+    private func inferInstrument(role: String, roleGroup: CreditRoleGroup) -> String? {
+        guard roleGroup == .musicians else {
+            return nil
+        }
+
+        let cleaned = role.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.isEmpty {
+            return nil
+        }
+
+        return cleaned
+    }
+
+    private func parseTrackListing(from section: String) -> [Int: String] {
+        guard !section.isEmpty else {
+            return [:]
+        }
+
+        var tracks: [Int: String] = [:]
+        let lines = section.components(separatedBy: .newlines)
+        var listIndex = 1
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                continue
+            }
+
+            if let parsed = parseNumberedTrackLine(trimmed) {
+                tracks[parsed.number] = parsed.title
+                continue
+            }
+
+            if let parsed = parseTemplateTrackLine(trimmed) {
+                tracks[parsed.number] = parsed.title
+                continue
+            }
+
+            if trimmed.hasPrefix("#"), let title = extractListTrackTitle(from: trimmed) {
+                if tracks[listIndex] == nil {
+                    tracks[listIndex] = title
+                }
+                listIndex += 1
+            }
+        }
+
+        return tracks
+    }
+
+    private func parseNumberedTrackLine(_ line: String) -> (number: Int, title: String)? {
+        for regex in Self.numberedTrackRegexes {
+            let range = NSRange(line.startIndex..., in: line)
+            guard let match = regex.firstMatch(in: line, options: [], range: range),
+                  let numberRange = Range(match.range(at: 1), in: line),
+                  let number = Int(line[numberRange]) else {
+                continue
+            }
+
+            let titleRangeIndex = match.numberOfRanges > 2 ? 2 : 1
+            guard let titleRange = Range(match.range(at: titleRangeIndex), in: line) else {
+                continue
+            }
+
+            let title = cleanupWikiMarkup(String(line[titleRange]))
+            if !title.isEmpty {
+                return (number, title)
+            }
+        }
+
+        return nil
+    }
+
+    private func parseTemplateTrackLine(_ line: String) -> (number: Int, title: String)? {
+        let range = NSRange(line.startIndex..., in: line)
+        guard let match = Self.templateTrackTitleRegex.firstMatch(in: line, options: [], range: range),
+              let numberRange = Range(match.range(at: 1), in: line),
+              let number = Int(line[numberRange]),
+              let titleRange = Range(match.range(at: 2), in: line) else {
+            return nil
+        }
+
+        let title = cleanupWikiMarkup(String(line[titleRange]))
+        guard !title.isEmpty else {
+            return nil
+        }
+
+        return (number, title)
+    }
+
+    private func extractQuotedTitle(from line: String) -> String? {
+        let range = NSRange(line.startIndex..., in: line)
+        guard let match = Self.quotedTitleRegex.firstMatch(in: line, options: [], range: range),
+              let capture = Range(match.range(at: 1), in: line) else {
+            return nil
+        }
+
+        return cleanupWikiMarkup(String(line[capture]))
+    }
+
+    private func extractListTrackTitle(from line: String) -> String? {
+        if let quoted = extractQuotedTitle(from: line) {
+            return quoted
+        }
+
+        let nsRange = NSRange(line.startIndex..., in: line)
+        var candidate = Self.listIndexPrefixRegex.stringByReplacingMatches(
+            in: line,
+            options: [],
+            range: nsRange,
+            withTemplate: ""
+        )
+        candidate = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let separator = candidate.range(of: " – ") ?? candidate.range(of: " - ") {
+            candidate = String(candidate[..<separator.lowerBound])
+        }
+
+        let cleaned = cleanupWikiMarkup(candidate)
+        return cleaned.isEmpty ? nil : cleaned
+    }
+
+    private func resolveTrackNumber(for title: String, using tracks: [Int: String]) -> Int? {
+        guard !tracks.isEmpty else {
+            return nil
+        }
+
+        let normalizedTitle = CreditsTextNormalizer.normalize(title, options: trackTitleNormalizationOptions)
+        guard !normalizedTitle.isEmpty else {
+            return nil
+        }
+
+        var best: (number: Int, score: Double)?
+
+        for (number, trackTitle) in tracks {
+            let normalizedTrackTitle = CreditsTextNormalizer.normalize(trackTitle, options: trackTitleNormalizationOptions)
+            let score = CreditsTextSimilarity.jaccardSimilarity(
+                normalizedTitle,
+                normalizedTrackTitle,
+                containsMatchScore: trackTitleContainsMatchScore
+            )
+            if let current = best {
+                if score > current.score {
+                    best = (number, score)
+                }
+            } else {
+                best = (number, score)
+            }
+        }
+
+        guard let best, best.score >= 0.40 else {
+            return nil
+        }
+
+        return best.number
+    }
+
+    private func extractSection(matchingAny candidates: [String], in text: String) -> String? {
+        let nsRange = NSRange(text.startIndex..., in: text)
+        let matches = Self.headingRegex.matches(in: text, range: nsRange)
+        guard !matches.isEmpty else {
+            return nil
+        }
+
+        for (index, match) in matches.enumerated() {
+            guard let titleRange = Range(match.range(at: 1), in: text) else {
+                continue
+            }
+
+            let title = text[titleRange].lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            let isMatch = candidates.contains(where: { title.contains($0) })
+            guard isMatch else {
+                continue
+            }
+
+            let sectionStart = match.range.upperBound
+            let sectionEnd = index + 1 < matches.count ? matches[index + 1].range.location : nsRange.upperBound
+            let sectionRange = NSRange(location: sectionStart, length: max(sectionEnd - sectionStart, 0))
+
+            if let swiftRange = Range(sectionRange, in: text) {
+                return String(text[swiftRange])
+            }
+        }
+
+        return nil
+    }
+
+    private func sanitizeWikitext(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: #"(?s)<!--.*?-->"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"(?s)<ref[^>]*>.*?</ref>"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"<ref[^/>]*/>"#, with: " ", options: .regularExpression)
+    }
+
+    private func cleanupWikiMarkup(_ value: String) -> String {
+        var output = value
+        output = output.replacingOccurrences(of: #"\[\[([^\]|]+)\|([^\]]+)\]\]"#, with: "$2", options: .regularExpression)
+        output = output.replacingOccurrences(of: #"\[\[([^\]]+)\]\]"#, with: "$1", options: .regularExpression)
+        output = output.replacingOccurrences(of: #"\{\{[^\}]*\}\}"#, with: " ", options: .regularExpression)
+        output = output.replacingOccurrences(of: #"\[[0-9]+\]"#, with: " ", options: .regularExpression)
+        output = output.replacingOccurrences(of: "''", with: "")
+        output = output.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        return output.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
