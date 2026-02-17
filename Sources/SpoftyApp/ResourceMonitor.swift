@@ -7,7 +7,7 @@ enum ResourceMonitor {
         let (userTime, systemTime) = cpuTimes()
         let (cacheSize, cacheEntries, cacheExists) = cacheDiskInfo()
 
-        let snapshot = ResourceSnapshot(
+        return ResourceSnapshot(
             capturedAt: Date(),
             residentBytes: residentBytes,
             virtualBytes: virtualBytes,
@@ -17,10 +17,6 @@ enum ResourceMonitor {
             cacheEntryCount: cacheEntries,
             cacheFileExists: cacheExists
         )
-
-        DebugLogger.log(.diagnostics, "snapshot resident=\(residentBytes) virtual=\(virtualBytes) cpu_user=\(String(format: "%.3f", userTime))s cpu_sys=\(String(format: "%.3f", systemTime))s cache_kb=\(String(format: "%.1f", snapshot.cacheFileSizeKB))")
-
-        return snapshot
     }
 
     private static func memoryUsage() -> (resident: UInt64, virtual: UInt64) {
@@ -34,7 +30,6 @@ enum ResourceMonitor {
         }
 
         guard result == KERN_SUCCESS else {
-            DebugLogger.log(.diagnostics, "task_info TASK_VM_INFO failed kern=\(result)")
             return (0, 0)
         }
 
@@ -52,7 +47,6 @@ enum ResourceMonitor {
         }
 
         guard result == KERN_SUCCESS else {
-            DebugLogger.log(.diagnostics, "task_info TASK_THREAD_TIMES_INFO failed kern=\(result)")
             return (0, 0)
         }
 
@@ -76,11 +70,13 @@ enum ResourceMonitor {
             fileSize = size
         }
 
-        var entryCount = 0
-        if let data = try? Data(contentsOf: cacheURL),
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let entries = json["entries"] as? [String: Any] {
-            entryCount = entries.count
+        let entryCount = autoreleasepool {
+            guard let data = try? Data(contentsOf: cacheURL),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let entries = json["entries"] as? [String: Any] else {
+                return 0
+            }
+            return entries.count
         }
 
         return (fileSize, entryCount, true)

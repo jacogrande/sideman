@@ -9,7 +9,6 @@ enum DebugLogCategory: String, CaseIterable {
     case provider
     case network
     case cache
-    case diagnostics
 
     var title: String {
         rawValue.uppercased()

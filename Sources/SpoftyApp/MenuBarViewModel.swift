@@ -66,8 +66,10 @@ final class MenuBarViewModel: ObservableObject {
     func refreshOnce(forceCreditsRefresh: Bool = false) async {
         isLoading = true
         let latest = await provider.fetchSnapshot()
-        _ = apply(snapshot: latest, at: Date())
-        DebugLogger.log(.nowPlaying, "snapshot updated state=\(snapshotStateLabel(latest.state))")
+        let changed = apply(snapshot: latest, at: Date())
+        if changed {
+            DebugLogger.log(.nowPlaying, "snapshot updated state=\(snapshotStateLabel(latest.state))")
+        }
         await refreshCreditsIfNeeded(for: latest, forceRefresh: forceCreditsRefresh)
     }
 
@@ -102,7 +104,6 @@ final class MenuBarViewModel: ObservableObject {
 
         let trackKey = await creditsProvider.cacheLookupKey(for: track)
         if !forceRefresh, lastCreditsTrackKey == trackKey {
-            DebugLogger.log(.provider, "credits skip: unchanged track key=\(trackKey)")
             return
         }
 
