@@ -2,9 +2,9 @@ import XCTest
 @testable import SidemanApp
 
 final class CreditsProviderFactoryTests: XCTestCase {
-    func testBackendSelectionDefaultsToWikipedia() {
-        XCTAssertEqual(CreditsBackend.fromEnvironment([:]), .wikipedia)
-        XCTAssertEqual(CreditsBackend.fromEnvironment(["SIDEMAN_CREDITS_BACKEND": "invalid"]), .wikipedia)
+    func testBackendSelectionDefaultsToWikipediaThenMusicBrainz() {
+        XCTAssertEqual(CreditsBackend.fromEnvironment([:]), .wikipediaThenMusicBrainz)
+        XCTAssertEqual(CreditsBackend.fromEnvironment(["SIDEMAN_CREDITS_BACKEND": "invalid"]), .wikipediaThenMusicBrainz)
     }
 
     func testBackendSelectionSupportsMusicBrainzAndHybrid() {

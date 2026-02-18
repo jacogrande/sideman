@@ -7,7 +7,7 @@ enum CreditsBackend: String {
 
     static func fromEnvironment(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> CreditsBackend {
         guard let raw = environment["SIDEMAN_CREDITS_BACKEND"]?.lowercased() else {
-            return .wikipedia
+            return .wikipediaThenMusicBrainz
         }
 
         switch raw {
@@ -18,7 +18,7 @@ enum CreditsBackend: String {
         case "wikipedia_then_musicbrainz", "hybrid":
             return .wikipediaThenMusicBrainz
         default:
-            return .wikipedia
+            return .wikipediaThenMusicBrainz
         }
     }
 }
