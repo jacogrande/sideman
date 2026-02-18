@@ -521,6 +521,57 @@ final class WikipediaWikitextParserTests: XCTestCase {
         // Michael Brauer: "mixing on tracks 3, 5, 6, 7, 9, 10 and 11" → does NOT include track 8
         XCTAssertFalse(parsed.entries.contains(where: { $0.personName == "Michael Brauer" }))
     }
+
+    func testParseBulletListWithDivColAndRefTags() {
+        let parser = DefaultWikipediaWikitextParser()
+        let page = WikipediaPageContent(
+            pageID: 45600219,
+            title: "To Pimp a Butterfly",
+            fullURL: "https://en.wikipedia.org/wiki/To_Pimp_a_Butterfly",
+            wikitext: tpabWikitext
+        )
+        let track = NowPlayingTrack(
+            id: "spotify:track:momma",
+            title: "Momma",
+            artist: "Kendrick Lamar",
+            album: "To Pimp a Butterfly",
+            trackNumber: 9
+        )
+
+        let parsed = parser.parse(page: page, for: track)
+
+        XCTAssertEqual(parsed.matchedTrackNumber, 9)
+        XCTAssertFalse(parsed.entries.isEmpty, "Should parse entries from {{Div col}} bullet-list format")
+
+        // Kendrick Lamar has album-wide "vocals" → applies to track 9
+        let kendrick = parsed.entries.filter { $0.personName == "Kendrick Lamar" }
+        XCTAssertTrue(kendrick.contains(where: { $0.roleRaw == "vocals" }))
+
+        // Terrace Martin: alto saxophone (tracks 1, 2, 6–9, ...) → includes track 9
+        XCTAssertTrue(parsed.entries.contains(where: { $0.personName == "Terrace Martin" && $0.roleRaw == "alto saxophone" }))
+        // Terrace Martin: keyboards (tracks 5, 6, 8–12) → includes track 9
+        XCTAssertTrue(parsed.entries.contains(where: { $0.personName == "Terrace Martin" && $0.roleRaw == "keyboards" }))
+        // Terrace Martin: vocoder (tracks 9, 14) → includes track 9
+        XCTAssertTrue(parsed.entries.contains(where: { $0.personName == "Terrace Martin" && $0.roleRaw == "vocoder" }))
+
+        // Knxwledge: producer (track 9) → includes track 9
+        XCTAssertTrue(parsed.entries.contains(where: { $0.personName == "Knxwledge" && $0.roleRaw == "producer" }))
+
+        // Bilal: backing vocals (6, 8–10) → includes track 9
+        XCTAssertTrue(parsed.entries.contains(where: { $0.personName == "Bilal" && $0.roleRaw == "backing vocals" }))
+
+        // Lalah Hathaway: background vocals (tracks 9, 12, 13) → includes track 9
+        XCTAssertTrue(parsed.entries.contains(where: { $0.personName == "Lalah Hathaway" && $0.roleRaw == "background vocals" }))
+
+        // Taz Arnold aka Tisa: background vocals (tracks 4, 8, 9, 15) → includes track 9
+        XCTAssertTrue(parsed.entries.contains(where: { $0.personName == "Taz Arnold aka Tisa" }))
+
+        // George Clinton: vocals (track 1) → does NOT apply to track 9
+        XCTAssertFalse(parsed.entries.contains(where: { $0.personName == "George Clinton" }))
+
+        // Flying Lotus: producer (track 1) → does NOT apply to track 9
+        XCTAssertFalse(parsed.entries.contains(where: { $0.personName == "Flying Lotus" }))
+    }
 }
 
 private let selfClosingRefWikitext = """
@@ -761,5 +812,106 @@ Adapted from vinyl liner notes.
 * Mark Paton – vocals (track 7)
 
 == Charts ==
+* placeholder
+"""
+
+private let tpabWikitext = """
+== Track listing ==
+{{Track listing
+| headline      = ''To Pimp a Butterfly'' track listing
+| extra_column  = Producer(s)
+| total_length  = 78:51
+
+| title1        = Wesley's Theory
+| note1         = featuring [[George Clinton (funk musician)|George Clinton]] and [[Thundercat (musician)|Thundercat]]
+| length1       = 4:47
+
+| title2        = [[For Free? (Interlude)]]
+| length2       = 2:10
+
+| title3        = [[King Kunta]]
+| length3       = 3:54
+
+| title4        = Institutionalized
+| length4       = 4:31
+
+| title5        = [[These Walls (Kendrick Lamar song)|These Walls]]
+| length5       = 5:00
+
+| title6        = U
+| length6       = 4:28
+
+| title7        = [[Alright (Kendrick Lamar song)|Alright]]
+| length7       = 3:39
+
+| title8        = For Sale? (Interlude)
+| length8       = 4:51
+
+| title9        = Momma
+| length9       = 4:43
+
+| title10       = Hood Politics
+| length10      = 4:52
+
+| title11       = [[How Much a Dollar Cost]]
+| length11      = 4:21
+
+| title12       = Complexion (A Zulu Love)
+| length12      = 4:23
+
+| title13       = [[The Blacker the Berry (song)|The Blacker the Berry]]
+| length13      = 5:28
+
+| title14       = You Ain't Gotta Lie (Momma Said)
+| length14      = 4:01
+
+| title15       = [[i (Kendrick Lamar song)|i]]
+| length15      = 5:36
+
+| title16       = Mortal Man
+| length16      = 12:07
+}}
+
+===Sample credits===
+* placeholder
+
+==Personnel==
+Credits for ''To Pimp a Butterfly'' adapted from [[AllMusic]] and the album's digital booklet.<ref name="booklet">{{cite AV media notes |title=To Pimp a Butterfly}}</ref><ref name="albumnotes">{{cite AV media notes|title=Digital Booklet}}</ref>
+
+{{Div col}}
+* Kendrick Lamar – vocals; art direction
+* [[George Clinton (funk musician)|George Clinton]] – vocals (track 1)
+* [[Thundercat (musician)|Thundercat]] – vocals (tracks 1, 5); background vocals (tracks 7, 12, 14); bass (tracks 1, 3, 13, 15, 16); additional bass (track 5); producer (tracks 10, 12); additional production (track 1)
+* [[Anna Wise]] – vocals (tracks 4, 5); backing vocals (tracks 1, 2, 10)
+* [[Bilal (American singer)|Bilal]] – vocals (tracks 4, 5); backing vocals (6, 8\u{2013}10)
+* [[Snoop Dogg]] – vocals (track 4)
+* [[James Fauntleroy]] – vocals (track 11); background vocals (track 16)
+* [[Ronald Isley]] – vocals (track 11); additional vocals (track 15)
+* [[Rapsody]] – vocals (track 12)
+* [[Flying Lotus]] – producer (track 1)
+* Ronald "Flippa" Colson – producer (track 1)
+* [[Sounwave]] – producer (tracks 3, 7, 10, 12, 16); additional production (tracks 1, 5, 6, 8, 10); keyboards (track 14); string arrangements
+* [[Terrace Martin]] – alto saxophone (tracks 1, 2, 6\u{2013}9, 11, 13, 14, 16); horns (track 1); keyboards (tracks 5, 6, 8\u{2013}12); producer (tracks 2, 5); additional production (tracks 3, 8, 12, 13); vocoder (tracks 9, 14); string arrangements
+* [[Rahki]] – producer (tracks 4, 15); percussion (track 15)
+* [[Sa-Ra|Taz Arnold]] aka Tisa – background vocals (tracks 4, 8, 9, 15); producer (tracks 6, 8)
+* [[Pharrell Williams]] – producer, vocals (track 7)
+* [[Knxwledge]] – producer (track 9)
+* [[Tae Beast]] – producer (track 10)
+* [[Dr. Dre]] – executive producer; background vocals (track 1, 10)
+* James Hunt – engineer (tracks 1\u{2013}7, 13\u{2013}16); mix assistant
+* [[Derek Ali|Derek "MixedByAli" Ali]] – engineer (tracks 1\u{2013}6, 8\u{2013}16), mixer
+* [[Mike Bozzi]] – mastering engineer
+* [[Ash Riser]] – background vocals (track 1)
+* [[Josef Leimberg]] – trumpet (tracks 1, 5, 8, 11, 12, 14, 16), vocals (track 1)
+* Whitney Alford – background vocals (tracks 1, 3)
+* [[Robert Glasper]] – piano (track 2); keyboards (tracks 5, 12, 13, 16)
+* [[Kamasi Washington]] – tenor saxophone (track 6); string arrangements
+* [[SZA (singer)|SZA]] – background vocals (tracks 6, 8)
+* [[Lalah Hathaway]] – background vocals (tracks 9, 12, 13)
+* [[Pete Rock]] – background vocals/scratches (track 12)
+* [[Ambrose Akinmusire]] – trumpet (track 16)
+{{div col end}}
+
+==Charts==
 * placeholder
 """

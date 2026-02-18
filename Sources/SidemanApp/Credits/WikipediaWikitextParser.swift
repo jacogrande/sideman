@@ -515,7 +515,7 @@ struct DefaultWikipediaWikitextParser: WikipediaWikitextParser {
 
             let currentHeadingLevel = text[levelRange].count
             let title = text[titleRange].lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-            let isMatch = candidates.contains(where: { title.contains($0) })
+            let isMatch = candidates.contains(where: { title.hasPrefix($0) })
             guard isMatch else {
                 continue
             }
