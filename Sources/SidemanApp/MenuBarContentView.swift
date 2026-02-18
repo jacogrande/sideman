@@ -357,9 +357,11 @@ struct MenuBarContentView: View {
                         let rows = aggregatedRows(from: bundle.entries(for: group))
                         if !rows.isEmpty {
                             VStack(alignment: .leading, spacing: 6) {
-                                Text(group.title)
-                                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                Text(group.title.uppercased())
+                                    .font(.system(size: 10, weight: .bold, design: .rounded))
                                     .foregroundStyle(.secondary)
+                                    .tracking(0.8)
+                                    .padding(.top, 4)
 
                                 ForEach(rows, id: \.id) { row in
                                     CreditPersonRow(row: row, hasMatchedTrack: bundle.matchedTrackNumber != nil) { tappedRow in
