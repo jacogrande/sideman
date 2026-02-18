@@ -20,7 +20,7 @@ enum SpotifyKeychain {
 
         let status = SecItemAdd(query as CFDictionary, nil)
         guard status == errSecSuccess else {
-            throw SpotifyClientError.network("Keychain save failed: \(status)")
+            throw SpotifyClientError.keychainError("Keychain save failed: OSStatus \(status)")
         }
 
         DebugLogger.log(.app, "Spotify tokens saved to Keychain")

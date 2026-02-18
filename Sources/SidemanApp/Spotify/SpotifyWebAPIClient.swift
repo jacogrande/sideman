@@ -17,7 +17,7 @@ actor SpotifyWebAPIClient: SpotifyWebAPI {
     private let minIntervalSeconds: TimeInterval
     private var lastRequestAt: Date?
     private var tokens: SpotifyTokens?
-    private var cachedUserID: String?
+    private var isRefreshing = false
 
     var isAuthenticated: Bool {
         tokens != nil && !(tokens?.isExpired ?? true)
@@ -77,7 +77,6 @@ actor SpotifyWebAPIClient: SpotifyWebAPI {
 
     func logout() {
         tokens = nil
-        cachedUserID = nil
         SpotifyKeychain.deleteTokens()
         DebugLogger.log(.app, "Spotify session cleared")
     }
@@ -98,8 +97,8 @@ actor SpotifyWebAPIClient: SpotifyWebAPI {
     }
 
     func searchTracks(title: String, artist: String) async throws -> [SpotifyTrack] {
-        let escapedTitle = title.replacingOccurrences(of: "\"", with: "")
-        let escapedArtist = artist.replacingOccurrences(of: "\"", with: "")
+        let escapedTitle = stripSearchMetacharacters(title)
+        let escapedArtist = stripSearchMetacharacters(artist)
         let query = "track:\"\(escapedTitle)\" artist:\"\(escapedArtist)\""
         let result: SpotifySearchResponseDTO = try await authenticatedRequest(
             path: "search",
@@ -114,7 +113,6 @@ actor SpotifyWebAPIClient: SpotifyWebAPI {
     }
 
     func createPlaylist(name: String, description: String, isPublic: Bool) async throws -> SpotifyPlaylist {
-        let userID = try await getCurrentUserID()
         let body: [String: Any] = [
             "name": name,
             "description": description,
@@ -124,7 +122,7 @@ actor SpotifyWebAPIClient: SpotifyWebAPI {
 
         let dto: SpotifyPlaylistDTO = try await authenticatedRequest(
             method: "POST",
-            path: "users/\(userID)/playlists",
+            path: "me/playlists",
             body: bodyData
         )
 
@@ -150,15 +148,6 @@ actor SpotifyWebAPIClient: SpotifyWebAPI {
         }
     }
 
-    func getCurrentUserID() async throws -> String {
-        if let cached = cachedUserID {
-            return cached
-        }
-        let user: SpotifyUserDTO = try await authenticatedRequest(path: "me")
-        cachedUserID = user.id
-        return user.id
-    }
-
     // MARK: - Token Exchange
 
     private func exchangeCodeForTokens(code: String, codeVerifier: String) async throws -> SpotifyTokens {
@@ -167,14 +156,14 @@ actor SpotifyWebAPIClient: SpotifyWebAPI {
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
 
-        let params = [
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": redirectURI,
-            "client_id": clientID,
-            "code_verifier": codeVerifier
+        let params: [(String, String)] = [
+            ("grant_type", "authorization_code"),
+            ("code", code),
+            ("redirect_uri", redirectURI),
+            ("client_id", clientID),
+            ("code_verifier", codeVerifier)
         ]
-        request.httpBody = params.map { "\($0.key)=\(percentEncode($0.value))" }.joined(separator: "&").data(using: .utf8)
+        request.httpBody = params.map { "\($0.0)=\(percentEncode($0.1))" }.joined(separator: "&").data(using: .utf8)
 
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
@@ -183,14 +172,25 @@ actor SpotifyWebAPIClient: SpotifyWebAPI {
         }
 
         let dto = try JSONDecoder().decode(TokenResponseDTO.self, from: data)
+        DebugLogger.log(.network, "Spotify token granted scopes: \(dto.scope ?? "<none>")")
+        guard let refreshToken = dto.refreshToken, !refreshToken.isEmpty else {
+            throw SpotifyClientError.authenticationFailed("No refresh token in response")
+        }
         return SpotifyTokens(
             accessToken: dto.accessToken,
-            refreshToken: dto.refreshToken ?? "",
+            refreshToken: refreshToken,
             expiresAt: Date().addingTimeInterval(TimeInterval(dto.expiresIn))
         )
     }
 
     private func refreshTokens() async throws {
+        guard !isRefreshing else {
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            return
+        }
+        isRefreshing = true
+        defer { isRefreshing = false }
+
         guard let currentTokens = tokens, !currentTokens.refreshToken.isEmpty else {
             throw SpotifyClientError.tokenRefreshFailed("No refresh token available")
         }
@@ -202,12 +202,12 @@ actor SpotifyWebAPIClient: SpotifyWebAPI {
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
 
-        let params = [
-            "grant_type": "refresh_token",
-            "refresh_token": currentTokens.refreshToken,
-            "client_id": clientID
+        let params: [(String, String)] = [
+            ("grant_type", "refresh_token"),
+            ("refresh_token", currentTokens.refreshToken),
+            ("client_id", clientID)
         ]
-        request.httpBody = params.map { "\($0.key)=\(percentEncode($0.value))" }.joined(separator: "&").data(using: .utf8)
+        request.httpBody = params.map { "\($0.0)=\(percentEncode($0.1))" }.joined(separator: "&").data(using: .utf8)
 
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
@@ -249,16 +249,23 @@ actor SpotifyWebAPIClient: SpotifyWebAPI {
 
         await paceRequests()
 
-        var components = URLComponents(url: apiBaseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
+        guard var components = URLComponents(url: apiBaseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false) else {
+            throw SpotifyClientError.network("Could not construct URL for path: \(path)")
+        }
         if !queryItems.isEmpty {
             components.queryItems = queryItems
         }
 
-        var request = URLRequest(url: components.url!)
+        guard let requestURL = components.url else {
+            throw SpotifyClientError.network("Could not construct URL for path: \(path)")
+        }
+
+        var request = URLRequest(url: requestURL)
         request.httpMethod = method
         request.timeoutInterval = 15
         request.setValue("Bearer \(currentTokens.accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        DebugLogger.log(.network, "request \(requestURL.absoluteString) attempt=\(attempt + 1)")
 
         if let body {
             request.httpBody = body
@@ -305,7 +312,14 @@ actor SpotifyWebAPIClient: SpotifyWebAPI {
         case 404:
             throw SpotifyClientError.notFound
 
+        case 403:
+            let responseBody = String(data: data, encoding: .utf8) ?? ""
+            DebugLogger.log(.network, "Spotify 403 Forbidden: \(method) \(path) — \(responseBody)")
+            throw SpotifyClientError.httpStatus(http.statusCode)
+
         default:
+            let responseBody = String(data: data, encoding: .utf8) ?? ""
+            DebugLogger.log(.network, "Spotify HTTP \(http.statusCode): \(method) \(path) — \(responseBody)")
             throw SpotifyClientError.httpStatus(http.statusCode)
         }
     }
@@ -338,6 +352,11 @@ actor SpotifyWebAPIClient: SpotifyWebAPI {
     }
 
     // MARK: - Helpers
+
+    private func stripSearchMetacharacters(_ value: String) -> String {
+        let metacharacters = CharacterSet(charactersIn: "\"+-!(){}[]^~*?:\\/")
+        return value.unicodeScalars.filter { !metacharacters.contains($0) }.map(String.init).joined()
+    }
 
     private func percentEncode(_ value: String) -> String {
         // RFC 3986 unreserved characters only — safe for application/x-www-form-urlencoded
@@ -454,8 +473,4 @@ private struct SpotifySnapshotDTO: Decodable {
     enum CodingKeys: String, CodingKey {
         case snapshotId = "snapshot_id"
     }
-}
-
-private struct SpotifyUserDTO: Decodable {
-    let id: String
 }

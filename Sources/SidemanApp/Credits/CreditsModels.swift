@@ -469,6 +469,7 @@ enum SpotifyClientError: Error, Equatable {
     case decoding(String)
     case network(String)
     case tokenRefreshFailed(String)
+    case keychainError(String)
 }
 
 enum PlaylistBuilderError: Error, Equatable {

@@ -16,6 +16,11 @@ actor SpotifyCallbackServer {
 
         let guard_ = ContinuationGuard()
 
+        let timeoutTask = Task {
+            try? await Task.sleep(nanoseconds: 120_000_000_000)
+            guard_.resume(throwing: SpotifyClientError.authenticationCancelled)
+        }
+
         let code: String = try await withCheckedThrowingContinuation { continuation in
             guard_.setContinuation(continuation)
 
@@ -25,13 +30,20 @@ actor SpotifyCallbackServer {
                     guard let data, let request = String(data: data, encoding: .utf8) else { return }
 
                     let parsedURL = Self.parseRequestURL(from: request)
-                    let queryItems = parsedURL
-                        .flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems }
 
+                    guard let url = parsedURL, url.path == "/callback" else {
+                        let notFound = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        connection.send(content: notFound.data(using: .utf8), completion: .contentProcessed { _ in
+                            connection.cancel()
+                        })
+                        return
+                    }
+
+                    let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems
                     let state = queryItems?.first(where: { $0.name == "state" })?.value
                     let authCode = queryItems?.first(where: { $0.name == "code" })?.value
 
-                    guard let _ = queryItems, state == expectedState, let authCode else {
+                    guard state == expectedState, let authCode else {
                         let errorBody = "Invalid callback request."
                         let errorResponse = Self.httpResponse(body: errorBody)
                         connection.send(content: errorResponse.data(using: .utf8), completion: .contentProcessed { _ in
@@ -52,22 +64,19 @@ actor SpotifyCallbackServer {
                         connection.cancel()
                     })
 
+                    timeoutTask.cancel()
                     guard_.resume(returning: authCode)
                 }
             }
 
             listener?.stateUpdateHandler = { state in
                 if case .failed(let error) = state {
+                    timeoutTask.cancel()
                     guard_.resume(throwing: SpotifyClientError.network("Listener failed: \(error)"))
                 }
             }
 
             listener?.start(queue: .global())
-
-            Task {
-                try? await Task.sleep(nanoseconds: 120_000_000_000)
-                guard_.resume(throwing: SpotifyClientError.authenticationCancelled)
-            }
         }
 
         stop()

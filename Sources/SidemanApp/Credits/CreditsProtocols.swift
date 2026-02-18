@@ -52,5 +52,4 @@ protocol SpotifyWebAPI {
     func searchTracks(title: String, artist: String) async throws -> [SpotifyTrack]
     func createPlaylist(name: String, description: String, isPublic: Bool) async throws -> SpotifyPlaylist
     func addTracksToPlaylist(playlistID: String, trackURIs: [String]) async throws
-    func getCurrentUserID() async throws -> String
 }
