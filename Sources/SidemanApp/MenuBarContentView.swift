@@ -30,7 +30,8 @@ struct MenuBarContentView: View {
                 diagnosticsCard
                 footer
             }
-            .padding(14)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 24)
         }
         .frame(width: 420)
     }

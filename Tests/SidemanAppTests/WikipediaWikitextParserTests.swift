@@ -230,7 +230,148 @@ final class WikipediaWikitextParserTests: XCTestCase {
         // Mat Davidson: "accordion (14)" → does NOT include track 3
         XCTAssertFalse(parsed.entries.contains(where: { $0.personName == "Mat Davidson" && $0.roleRaw == "accordion" }))
     }
+    func testParseSurvivesSelfClosingRefBeforePersonnelSection() {
+        // Self-closing <ref name="X"/> before the Personnel section should not
+        // cause the sanitizer to eat the heading. Regression test for a bug where
+        // the paired-ref regex matched self-closing refs as opening tags.
+        let parser = DefaultWikipediaWikitextParser()
+        let page = WikipediaPageContent(
+            pageID: 8,
+            title: "Continuum",
+            fullURL: "https://en.wikipedia.org/wiki/Continuum_(John_Mayer_album)",
+            wikitext: selfClosingRefWikitext
+        )
+        let track = NowPlayingTrack(
+            id: "spotify:track:self-closing-ref",
+            title: "Slow Dancing in a Burning Room",
+            artist: "John Mayer",
+            album: "Continuum",
+            trackNumber: 7
+        )
+
+        let parsed = parser.parse(page: page, for: track)
+
+        XCTAssertTrue(parsed.entries.contains(where: { $0.personName == "John Mayer" }))
+        XCTAssertTrue(parsed.entries.contains(where: { $0.personName == "James Valentine" }))
+        // Pino's bass is "all tracks", should match track 7
+        XCTAssertTrue(parsed.entries.contains(where: { $0.personName == "Pino Palladino" }))
+        // James Valentine's inline "on tracks 7 and 11" should be parsed as a scope
+        let jv = parsed.entries.filter { $0.personName == "James Valentine" }
+        XCTAssertEqual(jv.count, 1)
+        XCTAssertEqual(jv.first?.roleRaw, "guitar")
+        XCTAssertTrue(jv.first?.scope.applies(to: 7) == true)
+    }
+
+    func testParseHandlesInlineTrackScopes() {
+        // Wikipedia personnel entries that use "on track(s) N" instead of "(tracks N)".
+        let parser = DefaultWikipediaWikitextParser()
+        let page = WikipediaPageContent(
+            pageID: 9,
+            title: "Continuum (John Mayer album)",
+            fullURL: "https://en.wikipedia.org/wiki/Continuum_(John_Mayer_album)",
+            wikitext: inlineTrackScopeWikitext
+        )
+        let track = NowPlayingTrack(
+            id: "spotify:track:inline-scope",
+            title: "Slow Dancing in a Burning Room",
+            artist: "John Mayer",
+            album: "Continuum",
+            trackNumber: 8
+        )
+
+        let parsed = parser.parse(page: page, for: track)
+
+        // John Mayer has "all tracks" → album-wide, matches track 8
+        let jm = parsed.entries.filter { $0.personName == "John Mayer" }
+        XCTAssertTrue(jm.contains(where: { $0.roleRaw == "vocals" }))
+
+        // Steve Jordan: "drums on all tracks except 5" → trackUnknown, matches all
+        XCTAssertTrue(parsed.entries.contains(where: { $0.personName == "Steve Jordan" && $0.roleRaw == "drums" }))
+
+        // Steve Jordan: "percussion on tracks 1, 2, 5, 8, and 10" → includes track 8
+        let sjPerc = parsed.entries.filter { $0.personName == "Steve Jordan" && $0.roleRaw == "percussion" }
+        XCTAssertEqual(sjPerc.count, 1)
+        XCTAssertTrue(sjPerc.first?.scope.applies(to: 8) == true)
+
+        // Steve Jordan: "backing vocals on track 1" → does NOT include track 8
+        XCTAssertFalse(parsed.entries.contains(where: { $0.personName == "Steve Jordan" && $0.roleRaw == "backing vocals" }))
+
+        // Roy Hargrove: "horns on tracks 1 and 2" → does NOT include track 8
+        XCTAssertFalse(parsed.entries.contains(where: { $0.personName == "Roy Hargrove" }))
+
+        // James Valentine: "guitar on tracks 7 and 11" → does NOT include track 8
+        XCTAssertFalse(parsed.entries.contains(where: { $0.personName == "James Valentine" }))
+
+        // Pino: "bass guitar (all tracks)" → parenthetical, matches track 8
+        XCTAssertTrue(parsed.entries.contains(where: { $0.personName == "Pino Palladino" }))
+
+        // Manny Marroquin: "mixing on tracks 1, 2, 4, 8 and 12" → includes track 8
+        let mm = parsed.entries.filter { $0.personName == "Manny Marroquin" }
+        XCTAssertEqual(mm.count, 1)
+        XCTAssertTrue(mm.first?.scope.applies(to: 8) == true)
+
+        // Michael Brauer: "mixing on tracks 3, 5, 6, 7, 9, 10 and 11" → does NOT include track 8
+        XCTAssertFalse(parsed.entries.contains(where: { $0.personName == "Michael Brauer" }))
+    }
 }
+
+private let selfClosingRefWikitext = """
+Some intro text.<ref name="Qmag"/>
+
+More text with a proper ref.<ref name="Rolling">Rolling Stone review</ref>
+
+== Track listing ==
+# "Waiting on the World to Change"
+# "I Don't Trust Myself (With Loving You)"
+# "Belief"
+# "Gravity"
+# "The Heart of Life"
+# "Vultures"
+# "Slow Dancing in a Burning Room"
+
+== Personnel ==
+
+=== Musicians ===
+*John Mayer – vocals, guitars (all tracks); production
+*Pino Palladino – bass guitar (all tracks)
+*James Valentine – guitar on tracks 7 and 11
+
+== Charts ==
+* placeholder
+"""
+
+private let inlineTrackScopeWikitext = """
+== Track listing ==
+# "Waiting on the World to Change"
+# "I Don't Trust Myself (With Loving You)"
+# "Belief"
+# "Gravity"
+# "The Heart of Life"
+# "Vultures"
+# "Stop This Train"
+# "Slow Dancing in a Burning Room"
+# "Bold as Love"
+# "Dreaming with a Broken Heart"
+# "In Repair"
+# "I'm Gonna Find Another You"
+
+== Personnel ==
+
+=== Musicians ===
+*John Mayer – vocals, guitars (all tracks); production
+*Pino Palladino – bass guitar (all tracks); backing vocals on track 1
+*Steve Jordan – drums on all tracks except 5; percussion on tracks 1, 2, 5, 8, and 10; backing vocals on track 1; production
+*Roy Hargrove – horns on tracks 1 and 2
+*James Valentine – guitar on tracks 7 and 11
+*Jamie Muhoberac – keyboards on tracks 7 and 11
+
+=== Production ===
+*Manny Marroquin – mixing on tracks 1, 2, 4, 8 and 12
+*Michael Brauer – mixing on tracks 3, 5, 6, 7, 9, 10 and 11
+
+== Charts ==
+* placeholder
+"""
 
 private let nameOnlyPersonnelWikitext = """
 == Track listing ==

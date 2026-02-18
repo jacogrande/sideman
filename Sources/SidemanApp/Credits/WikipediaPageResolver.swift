@@ -48,7 +48,7 @@ actor DefaultWikipediaPageResolver: WikipediaPageResolver {
                 return .failure(.notFound)
             }
 
-            if best.score >= 0.60, secondScore >= 0.55, margin < 0.07 {
+            if best.score < 0.95, best.score >= 0.60, secondScore >= 0.55, margin < 0.07 {
                 return .failure(.ambiguous)
             }
 

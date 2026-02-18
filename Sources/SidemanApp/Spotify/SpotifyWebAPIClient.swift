@@ -7,14 +7,7 @@ import AppKit
 #endif
 
 actor SpotifyWebAPIClient: SpotifyWebAPI {
-    private let clientID: String = {
-        if let envID = ProcessInfo.processInfo.environment["SIDEMAN_SPOTIFY_CLIENT_ID"], !envID.isEmpty {
-            return envID
-        }
-        // PKCE means this is not a secret, but it must be set for OAuth to work.
-        // Set SIDEMAN_SPOTIFY_CLIENT_ID in your environment or replace this value.
-        return "YOUR_SPOTIFY_CLIENT_ID"
-    }()
+    private let clientID = "0e45759716504c17b8441f9aaec23ed2"
     private let redirectURI = "http://127.0.0.1:28371/callback"
     private let scopes = "playlist-modify-public playlist-modify-private"
     private let authBaseURL = URL(string: "https://accounts.spotify.com")!

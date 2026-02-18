@@ -37,7 +37,10 @@ final class WikipediaPageResolverTests: XCTestCase {
         }
     }
 
-    func testResolvePageReturnsAmbiguousWhenTopScoresAreTooClose() async {
+    func testResolvePageAcceptsHighConfidenceEvenWhenTied() async {
+        // When two candidates both score >= 0.95, the resolver should accept the
+        // top one rather than returning ambiguous — high confidence means we trust
+        // the match even if there's a close runner-up.
         let track = NowPlayingTrack(
             id: "spotify:track:2",
             title: "Concorde",
@@ -56,6 +59,45 @@ final class WikipediaPageResolverTests: XCTestCase {
                     pageID: 21,
                     title: "Ants from Up There album",
                     snippet: "Ants from Up There is an album by Black Country, New Road."
+                )
+            ]
+        ])
+
+        let resolver = DefaultWikipediaPageResolver(client: client)
+        let result = await resolver.resolvePage(for: track)
+
+        switch result {
+        case .success(let page):
+            XCTAssertEqual(page.pageID, 20)
+            XCTAssertGreaterThanOrEqual(page.confidence, 0.95)
+        case .failure(let error):
+            XCTFail("Expected success for high-confidence match, got \(error)")
+        }
+    }
+
+    func testResolvePageReturnsAmbiguousWhenMidScoresAreTooClose() async {
+        // When two candidates score in the mid range (0.60-0.94) with a small
+        // margin, the resolver should return ambiguous. Both titles here contain
+        // the album name as a substring (giving ~0.87 via containsMatchScore)
+        // but neither reaches the 0.95 high-confidence threshold.
+        let track = NowPlayingTrack(
+            id: "spotify:track:2b",
+            title: "Raindrop",
+            artist: "The Echoes",
+            album: "Midnight Sessions"
+        )
+
+        let client = StubResolverWikipediaClient(resultsByQuery: [
+            "Midnight Sessions The Echoes album": [
+                WikipediaSearchResult(
+                    pageID: 30,
+                    title: "Midnight Sessions Live",
+                    snippet: "A live recording from 2019."
+                ),
+                WikipediaSearchResult(
+                    pageID: 31,
+                    title: "Midnight Sessions Tour",
+                    snippet: "A concert tour in 2020."
                 )
             ]
         ])

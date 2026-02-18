@@ -23,6 +23,7 @@ struct DefaultWikipediaWikitextParser: WikipediaWikitextParser {
     private static let quotedTitleRegex = makeRegex(#"\"([^\"]+)\""#)
     private static let listIndexPrefixRegex = makeRegex(#"^#+\s*"#)
     private static let headingRegex = makeRegex(#"(?m)^(=+)\s*([^=\n]+?)\s*\1\s*$"#)
+    private static let inlineTrackScopeRegex = makeRegex(#"\s+on\s+((?:all\s+)?tracks?\b.*)$"#, options: [.caseInsensitive])
 
     private static func makeRegex(_ pattern: String, options: NSRegularExpression.Options = []) -> NSRegularExpression {
         // Patterns are compile-time constants. Fail fast if one becomes invalid.
@@ -168,7 +169,8 @@ struct DefaultWikipediaWikitextParser: WikipediaWikitextParser {
         var result: [RoleSegment] = []
 
         for group in groups {
-            let items = splitParenAware(group, on: ",")
+            let converted = parenthesizeInlineTrackScope(group)
+            let items = splitParenAware(converted, on: ",")
 
             // Determine group scope from the last item.
             var trailingText = items.last ?? ""
@@ -229,6 +231,20 @@ struct DefaultWikipediaWikitextParser: WikipediaWikitextParser {
     private func stripLineItemPrefix(from line: String) -> String {
         let nsRange = NSRange(line.startIndex..., in: line)
         return Self.lineItemPrefixRegex.stringByReplacingMatches(in: line, options: [], range: nsRange, withTemplate: "")
+    }
+
+    /// Converts inline "on track(s) N, M" to parenthetical "(tracks N, M)" so the
+    /// paren-aware splitter keeps track-list commas intact.
+    private func parenthesizeInlineTrackScope(_ text: String) -> String {
+        let range = NSRange(text.startIndex..., in: text)
+        guard let match = Self.inlineTrackScopeRegex.firstMatch(in: text, options: [], range: range),
+              let fullRange = Range(match.range(at: 0), in: text),
+              let captureRange = Range(match.range(at: 1), in: text) else {
+            return text
+        }
+        let scopeContent = String(text[captureRange])
+        let prefix = String(text[..<fullRange.lowerBound])
+        return "\(prefix) (\(scopeContent))"
     }
 
     private func extractScope(from roleText: inout String) -> CreditScope {
@@ -530,8 +546,9 @@ struct DefaultWikipediaWikitextParser: WikipediaWikitextParser {
     private func sanitizeWikitext(_ text: String) -> String {
         text
             .replacingOccurrences(of: #"(?s)<!--.*?-->"#, with: " ", options: .regularExpression)
-            .replacingOccurrences(of: #"(?s)<ref[^>]*>.*?</ref>"#, with: " ", options: .regularExpression)
-            .replacingOccurrences(of: #"<ref[^/>]*/>"#, with: " ", options: .regularExpression)
+            // Remove self-closing refs FIRST so they don't get mismatched as opening tags.
+            .replacingOccurrences(of: #"<ref\b[^>]*/>"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"(?s)<ref\b[^>]*>.*?</ref>"#, with: " ", options: .regularExpression)
     }
 
     private func cleanupWikiMarkup(_ value: String) -> String {
