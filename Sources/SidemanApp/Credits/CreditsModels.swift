@@ -354,6 +354,7 @@ struct ArtistRecordingRel: Equatable, Codable {
     let relationshipType: String
     let attributes: [String]
     let artistCredits: [String]
+    let isrcs: [String]
 }
 
 struct DiscographyResult: Equatable, Codable {

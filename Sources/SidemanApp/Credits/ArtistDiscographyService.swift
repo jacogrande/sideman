@@ -41,19 +41,19 @@ actor ArtistDiscographyService {
 
         // Supplement with browse recordings (main-artist tracks), capped to avoid
         // unbounded pagination for prolific artists
-        let maxBrowseRecordings = 500
+        let maxTotalRecordings = 500
         do {
             var offset = 0
             let pageSize = 100
             var hasMore = true
 
-            while hasMore && allRecordings.count < maxBrowseRecordings {
+            while hasMore && allRecordings.count < maxTotalRecordings {
                 try Task.checkCancellation()
                 let page = try await musicBrainzClient.browseRecordings(
                     artistID: artistMBID,
                     offset: offset,
                     limit: pageSize,
-                    includeISRCs: false
+                    includeISRCs: true
                 )
 
                 for rec in page.recordings {

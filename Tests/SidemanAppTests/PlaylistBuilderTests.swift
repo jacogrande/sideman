@@ -147,7 +147,8 @@ final class PlaylistBuilderTests: XCTestCase {
                     recordingTitle: "Track",
                     relationshipType: "instrument",
                     attributes: ["guitar"],
-                    artistCredits: ["Artist"]
+                    artistCredits: ["Artist"],
+                    isrcs: []
                 )
             ],
             fetchedAt: Date(timeIntervalSince1970: 1000)

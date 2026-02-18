@@ -40,13 +40,19 @@ actor TrackMatchingService {
 
     private func resolveViaISRC(recording: ArtistRecordingRel) async throws -> ResolvedTrack? {
         let isrcs: [String]
-        do {
-            isrcs = try await musicBrainzClient.getRecordingISRCs(id: recording.recordingMBID)
-        } catch {
-            return nil
+        if !recording.isrcs.isEmpty {
+            isrcs = recording.isrcs
+        } else {
+            do {
+                isrcs = try await musicBrainzClient.getRecordingISRCs(id: recording.recordingMBID)
+            } catch let error as MusicBrainzClientError where error == .rateLimited {
+                throw error
+            } catch {
+                return nil
+            }
         }
 
-        for isrc in isrcs.prefix(2) {
+        for isrc in isrcs.prefix(3) {
             try Task.checkCancellation()
             do {
                 let tracks = try await spotifyClient.searchTrackByISRC(isrc)

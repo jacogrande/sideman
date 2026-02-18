@@ -8,7 +8,8 @@ final class ArtistDiscographyServiceTests: XCTestCase {
             recordingTitle: "Session Track",
             relationshipType: "instrument",
             attributes: ["bass guitar"],
-            artistCredits: ["Main Artist"]
+            artistCredits: ["Main Artist"],
+            isrcs: []
         )
 
         let browseRecording = ArtistRecordingRel(
@@ -16,7 +17,8 @@ final class ArtistDiscographyServiceTests: XCTestCase {
             recordingTitle: "Main Track",
             relationshipType: "main",
             attributes: [],
-            artistCredits: ["Test Artist"]
+            artistCredits: ["Test Artist"],
+            isrcs: []
         )
 
         let client = StubMBClient(
@@ -47,7 +49,8 @@ final class ArtistDiscographyServiceTests: XCTestCase {
             recordingTitle: "Duplicate Track",
             relationshipType: "instrument",
             attributes: ["guitar"],
-            artistCredits: ["Artist"]
+            artistCredits: ["Artist"],
+            isrcs: []
         )
 
         let client = StubMBClient(
@@ -59,7 +62,8 @@ final class ArtistDiscographyServiceTests: XCTestCase {
                         recordingTitle: "Duplicate Track",
                         relationshipType: "main",
                         attributes: [],
-                        artistCredits: ["Artist"]
+                        artistCredits: ["Artist"],
+                        isrcs: []
                     )
                 ], totalCount: 1, offset: 0)
             ]
@@ -106,7 +110,8 @@ final class ArtistDiscographyServiceTests: XCTestCase {
             recordingTitle: "Cached Track",
             relationshipType: "instrument",
             attributes: ["piano"],
-            artistCredits: ["Pianist"]
+            artistCredits: ["Pianist"],
+            isrcs: []
         )
 
         let client = StubMBClient(

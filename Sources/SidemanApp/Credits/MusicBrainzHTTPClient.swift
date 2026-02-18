@@ -131,7 +131,8 @@ actor MusicBrainzHTTPClient: MusicBrainzClient {
                 recordingTitle: recording.title,
                 relationshipType: rel.type,
                 attributes: rel.attributes,
-                artistCredits: recording.artistCredit.map(\.name)
+                artistCredits: recording.artistCredit.map(\.name),
+                isrcs: []
             )
         }
     }
@@ -163,7 +164,8 @@ actor MusicBrainzHTTPClient: MusicBrainzClient {
                 recordingTitle: rec.title,
                 relationshipType: "main",
                 attributes: [],
-                artistCredits: rec.artistCredit.map(\.name)
+                artistCredits: rec.artistCredit.map(\.name),
+                isrcs: rec.isrcs
             )
         }
 
@@ -546,11 +548,13 @@ private struct BrowseRecordingDTO: Decodable {
     let id: String
     let title: String
     let artistCredit: [ArtistCreditDTO]
+    let isrcs: [String]
 
     enum CodingKeys: String, CodingKey {
         case id
         case title
         case artistCredit = "artist-credit"
+        case isrcs
     }
 
     init(from decoder: Decoder) throws {
@@ -558,6 +562,7 @@ private struct BrowseRecordingDTO: Decodable {
         id = try container.decode(String.self, forKey: .id)
         title = try container.decode(String.self, forKey: .title)
         artistCredit = try container.decodeIfPresent([ArtistCreditDTO].self, forKey: .artistCredit) ?? []
+        isrcs = try container.decodeIfPresent([String].self, forKey: .isrcs) ?? []
     }
 }
 
