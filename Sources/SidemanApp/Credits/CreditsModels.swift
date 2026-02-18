@@ -47,6 +47,16 @@ enum CreditRoleGroup: String, CaseIterable, Hashable, Codable {
         }
     }
 
+    var filterLabel: String {
+        switch self {
+        case .musicians: return "Musician"
+        case .production: return "Producer"
+        case .writing: return "Songwriter"
+        case .engineering: return "Engineer"
+        case .misc: return "Contributor"
+        }
+    }
+
     static var displayOrder: [CreditRoleGroup] {
         [.musicians, .production, .writing, .engineering, .misc]
     }
@@ -441,7 +451,7 @@ struct PlaylistBuildRequest {
     let isPublic: Bool
     let maxTracks: Int
 
-    init(artistMBID: String, artistName: String, roleFilter: CreditRoleGroup? = nil, isPublic: Bool = false, maxTracks: Int = 50) {
+    init(artistMBID: String, artistName: String, roleFilter: CreditRoleGroup? = nil, isPublic: Bool = false, maxTracks: Int = 100) {
         self.artistMBID = artistMBID
         self.artistName = artistName
         self.roleFilter = roleFilter

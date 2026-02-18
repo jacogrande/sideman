@@ -60,13 +60,40 @@ private struct PlaylistConfirmationView: View {
 
                     if let group = context.roleGroup {
                         RoleFilterCapsule(
-                            label: group.title,
+                            label: group.filterLabel,
                             isSelected: viewModel.selectedRoleFilter == group
                         ) {
                             viewModel.selectedRoleFilter = group
                         }
                     }
                 }
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Tracks: \(Int(viewModel.targetTrackCount))")
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
+
+                HStack(spacing: 0) {
+                    Slider(
+                        value: $viewModel.targetTrackCount,
+                        in: 25...100,
+                        step: 25
+                    )
+                    .controlSize(.mini)
+                }
+
+                HStack {
+                    Text("25")
+                    Spacer()
+                    Text("50")
+                    Spacer()
+                    Text("75")
+                    Spacer()
+                    Text("100")
+                }
+                .font(.system(size: 9, weight: .medium, design: .rounded))
+                .foregroundStyle(.tertiary)
             }
 
             HStack {

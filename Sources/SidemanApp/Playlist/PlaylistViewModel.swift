@@ -26,6 +26,7 @@ final class PlaylistViewModel: ObservableObject {
     @Published fileprivate(set) var phase: PlaylistFlowPhase = .idle
     @Published var selectedRoleFilter: CreditRoleGroup?
     @Published var isPublic: Bool = false
+    @Published var targetTrackCount: Double = 50
 
     private var buildTask: Task<Void, Never>?
     private var playlistBuilder: PlaylistBuilder?
@@ -110,11 +111,13 @@ final class PlaylistViewModel: ObservableObject {
                 }
             }
 
+            let target = Int(self.targetTrackCount)
             let request = PlaylistBuildRequest(
                 artistMBID: artistMBID,
                 artistName: context.personName,
                 roleFilter: self.selectedRoleFilter,
-                isPublic: self.isPublic
+                isPublic: self.isPublic,
+                maxTracks: target
             )
 
             do {

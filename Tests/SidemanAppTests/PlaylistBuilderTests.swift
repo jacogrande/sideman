@@ -12,7 +12,7 @@ final class PlaylistBuilderTests: XCTestCase {
         XCTAssertEqual(request.artistName, "Test Artist")
         XCTAssertNil(request.roleFilter)
         XCTAssertFalse(request.isPublic)
-        XCTAssertEqual(request.maxTracks, 50)
+        XCTAssertEqual(request.maxTracks, 100)
     }
 
     func testPlaylistBuildRequestCustomValues() {
