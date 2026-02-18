@@ -15,7 +15,7 @@ enum CreditsBackend: String {
             return .wikipedia
         case "musicbrainz":
             return .musicBrainz
-        case "wikipedia_then_musicbrainz", "hybrid":
+        case "wikipedia_then_musicbrainz", "hybrid", "merged":
             return .wikipediaThenMusicBrainz
         default:
             return .wikipediaThenMusicBrainz
@@ -67,48 +67,77 @@ enum CreditsProviderFactory {
         case .musicBrainz:
             return musicBrainzProvider
         case .wikipediaThenMusicBrainz:
-            return FallbackCreditsProvider(primary: wikipediaProvider, fallback: musicBrainzProvider)
+            return MergedCreditsProvider(wikipedia: wikipediaProvider, musicBrainz: musicBrainzProvider)
         }
     }
 }
 
-actor FallbackCreditsProvider: CreditsProvider {
-    private let primary: CreditsProvider
-    private let fallback: CreditsProvider
+actor MergedCreditsProvider: CreditsProvider {
+    private let wikipedia: CreditsProvider
+    private let musicBrainz: CreditsProvider
 
-    init(primary: CreditsProvider, fallback: CreditsProvider) {
-        self.primary = primary
-        self.fallback = fallback
+    init(wikipedia: CreditsProvider, musicBrainz: CreditsProvider) {
+        self.wikipedia = wikipedia
+        self.musicBrainz = musicBrainz
     }
 
     func lookupCredits(for track: NowPlayingTrack) async -> (CreditsLookupState, CreditsBundle?) {
-        let primaryResult = await primary.lookupCredits(for: track)
-        let primaryState = primaryResult.0
+        async let wikiResult = wikipedia.lookupCredits(for: track)
+        async let mbResult = musicBrainz.lookupCredits(for: track)
 
-        if primaryState == .loaded {
-            return primaryResult
+        let (wikiState, wikiBundle) = await wikiResult
+        let (mbState, mbBundle) = await mbResult
+
+        let wikiLoaded = wikiState == .loaded && wikiBundle != nil
+        let mbLoaded = mbState == .loaded && mbBundle != nil
+
+        if wikiLoaded && mbLoaded {
+            let merged = mergedBundle(wiki: wikiBundle!, mb: mbBundle!)
+            DebugLogger.log(.provider, "merged provider: combined Wikipedia (\(wikiBundle!.entriesByGroup.values.flatMap { $0 }.count) entries) + MusicBrainz (\(mbBundle!.entriesByGroup.values.flatMap { $0 }.count) entries)")
+            return (.loaded, merged)
         }
 
-        switch primaryState {
-        case .notFound, .ambiguous, .error, .rateLimited:
-            let fallbackResult = await fallback.lookupCredits(for: track)
-            if fallbackResult.0 == .loaded {
-                DebugLogger.log(.provider, "fallback provider returned loaded credits")
-                return fallbackResult
-            }
-        case .idle, .resolving, .loadingCredits, .loaded:
-            break
+        if wikiLoaded {
+            return (wikiState, wikiBundle)
         }
 
-        return primaryResult
+        if mbLoaded {
+            return (mbState, mbBundle)
+        }
+
+        return (.notFound, nil)
     }
 
     func cacheLookupKey(for track: NowPlayingTrack) async -> String {
-        await primary.cacheLookupKey(for: track)
+        await wikipedia.cacheLookupKey(for: track)
     }
 
     func invalidateCachedCredits(for track: NowPlayingTrack) async {
-        await primary.invalidateCachedCredits(for: track)
-        await fallback.invalidateCachedCredits(for: track)
+        await wikipedia.invalidateCachedCredits(for: track)
+        await musicBrainz.invalidateCachedCredits(for: track)
+    }
+
+    private func mergedBundle(wiki: CreditsBundle, mb: CreditsBundle) -> CreditsBundle {
+        let allWikiEntries = wiki.entriesByGroup.values.flatMap { $0 }
+        let allMBEntries = mb.entriesByGroup.values.flatMap { $0 }
+        let merged = CreditsMapper.mergeCrossSources(allWikiEntries + allMBEntries)
+        let grouped = CreditsMapper.group(merged)
+
+        let combinedProvenance = Array(Set(wiki.provenance + mb.provenance)).sorted { $0.sortRank < $1.sortRank }
+
+        let wikiAttribution = wiki.sourceAttribution ?? "Wikipedia"
+        let mbAttribution = mb.sourceAttribution ?? "MusicBrainz"
+
+        return CreditsBundle(
+            entriesByGroup: grouped,
+            provenance: combinedProvenance,
+            resolvedRecordingMBID: mb.resolvedRecordingMBID,
+            sourceID: wiki.sourceID ?? mb.sourceID,
+            sourceName: "Wikipedia + MusicBrainz",
+            sourcePageTitle: wiki.sourcePageTitle,
+            sourcePageURL: wiki.sourcePageURL,
+            sourceAttribution: "\(wikiAttribution) + \(mbAttribution)",
+            matchedTrackNumber: wiki.matchedTrackNumber
+        )
     }
 }

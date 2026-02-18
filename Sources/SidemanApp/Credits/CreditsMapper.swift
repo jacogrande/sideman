@@ -109,6 +109,39 @@ enum CreditsMapper {
         roleGroup(for: value, attributes: [])
     }
 
+    static func mergeCrossSources(_ entries: [CreditEntry]) -> [CreditEntry] {
+        var winnersByKey: [String: CreditEntry] = [:]
+
+        for entry in entries {
+            let key = crossSourceDedupeKey(for: entry)
+            if let existing = winnersByKey[key] {
+                // Prefer entry with MBID (MusicBrainz) over one without (Wikipedia)
+                if entry.personMBID != nil && existing.personMBID == nil {
+                    winnersByKey[key] = entry
+                }
+            } else {
+                winnersByKey[key] = entry
+            }
+        }
+
+        return winnersByKey.values.sorted { lhs, rhs in
+            if lhs.roleGroup != rhs.roleGroup {
+                return lhs.roleGroup.title < rhs.roleGroup.title
+            }
+            if lhs.personName != rhs.personName {
+                return lhs.personName.localizedCaseInsensitiveCompare(rhs.personName) == .orderedAscending
+            }
+            return lhs.roleRaw.localizedCaseInsensitiveCompare(rhs.roleRaw) == .orderedAscending
+        }
+    }
+
+    static func crossSourceDedupeKey(for entry: CreditEntry) -> String {
+        let person = entry.personName.lowercased()
+        let role = entry.roleRaw.lowercased()
+        let instrument = (entry.instrument ?? "").lowercased()
+        return "\(person)|\(entry.roleGroup.rawValue)|\(role)|\(instrument)|\(entry.scope)"
+    }
+
     private static func dedupeKey(for entry: CreditEntry) -> String {
         let person = (entry.personMBID ?? entry.personName).lowercased()
         let role = entry.roleRaw.lowercased()

@@ -11,5 +11,6 @@ final class CreditsProviderFactoryTests: XCTestCase {
         XCTAssertEqual(CreditsBackend.fromEnvironment(["SIDEMAN_CREDITS_BACKEND": "musicbrainz"]), .musicBrainz)
         XCTAssertEqual(CreditsBackend.fromEnvironment(["SIDEMAN_CREDITS_BACKEND": "wikipedia_then_musicbrainz"]), .wikipediaThenMusicBrainz)
         XCTAssertEqual(CreditsBackend.fromEnvironment(["SIDEMAN_CREDITS_BACKEND": "hybrid"]), .wikipediaThenMusicBrainz)
+        XCTAssertEqual(CreditsBackend.fromEnvironment(["SIDEMAN_CREDITS_BACKEND": "merged"]), .wikipediaThenMusicBrainz)
     }
 }
