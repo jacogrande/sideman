@@ -230,6 +230,214 @@ final class WikipediaWikitextParserTests: XCTestCase {
         // Mat Davidson: "accordion (14)" → does NOT include track 3
         XCTAssertFalse(parsed.entries.contains(where: { $0.personName == "Mat Davidson" && $0.roleRaw == "accordion" }))
     }
+
+    func testParseHandlesWikitablePersonnelFormat() {
+        let parser = DefaultWikipediaWikitextParser()
+        let page = WikipediaPageContent(
+            pageID: 10,
+            title: "Brown Sugar (D'Angelo album)",
+            fullURL: "https://en.wikipedia.org/wiki/Brown_Sugar_(D%27Angelo_album)",
+            wikitext: wikitablePersonnelWikitext
+        )
+        let track = NowPlayingTrack(
+            id: "spotify:track:wikitable",
+            title: "Brown Sugar",
+            artist: "D'Angelo",
+            album: "Brown Sugar",
+            trackNumber: 1
+        )
+
+        let parsed = parser.parse(page: page, for: track)
+
+        // Track 1: "Guitar by Bob Power" → name=Bob Power, role=Guitar
+        let bobGuitar = parsed.entries.first(where: { $0.personName == "Bob Power" && $0.roleRaw == "Guitar" })
+        XCTAssertNotNil(bobGuitar)
+        XCTAssertEqual(bobGuitar?.scope, .trackSpecific([1]))
+
+        // Track 1: "Drums by Questlove" → name=Questlove, role=Drums
+        XCTAssertTrue(parsed.entries.contains(where: { $0.personName == "Questlove" && $0.roleRaw == "Drums" }))
+
+        // Track 2: "Bass: Pino Palladino" → track 2 only, should NOT appear for track 1
+        XCTAssertFalse(parsed.entries.contains(where: { $0.personName == "Pino Palladino" }))
+
+        // Album-wide header row: "Mixed by Bob Power" → scope=albumWide, matches all tracks
+        XCTAssertTrue(parsed.entries.contains(where: { $0.personName == "Bob Power" && $0.roleRaw == "Mixed" }))
+        let mixedBob = parsed.entries.first(where: { $0.personName == "Bob Power" && $0.roleRaw == "Mixed" })
+        XCTAssertEqual(mixedBob?.scope, .albumWide)
+
+        // Comma-separated names: "Violins: Gerald Tarack, Marilyn Wright" in track 1
+        XCTAssertTrue(parsed.entries.contains(where: { $0.personName == "Gerald Tarack" && $0.roleRaw == "Violins" }))
+        XCTAssertTrue(parsed.entries.contains(where: { $0.personName == "Marilyn Wright" && $0.roleRaw == "Violins" }))
+
+        // Business credits should be filtered: "A&R: Michael Harris"
+        XCTAssertFalse(parsed.entries.contains(where: { $0.personName == "Michael Harris" }))
+
+        // "Photography: Carol Friedman" should be filtered
+        XCTAssertFalse(parsed.entries.contains(where: { $0.personName == "Carol Friedman" }))
+
+        // Engineering credits should be kept: "Recorded by Russell Elevado"
+        XCTAssertTrue(parsed.entries.contains(where: { $0.personName == "Russell Elevado" && $0.roleRaw == "Recorded" }))
+
+        // "Assistant engineer: G-Spot" should be kept
+        XCTAssertTrue(parsed.entries.contains(where: { $0.personName == "G-Spot" && $0.roleRaw == "Assistant engineer" }))
+
+        // Role groups: Guitar → musicians, Mixed → engineering
+        XCTAssertEqual(bobGuitar?.roleGroup, .musicians)
+        XCTAssertEqual(mixedBob?.roleGroup, .engineering)
+    }
+
+    func testParseWikitableTrack2CreditsAppearWhenRequested() {
+        let parser = DefaultWikipediaWikitextParser()
+        let page = WikipediaPageContent(
+            pageID: 10,
+            title: "Brown Sugar (D'Angelo album)",
+            fullURL: "https://en.wikipedia.org/wiki/Brown_Sugar_(D%27Angelo_album)",
+            wikitext: wikitablePersonnelWikitext
+        )
+        let track = NowPlayingTrack(
+            id: "spotify:track:wikitable-t2",
+            title: "Alright",
+            artist: "D'Angelo",
+            album: "Brown Sugar",
+            trackNumber: 2
+        )
+
+        let parsed = parser.parse(page: page, for: track)
+
+        // Track 2: "Bass: Pino Palladino" should appear
+        XCTAssertTrue(parsed.entries.contains(where: { $0.personName == "Pino Palladino" && $0.roleRaw == "Bass" }))
+        let pino = parsed.entries.first(where: { $0.personName == "Pino Palladino" })
+        XCTAssertEqual(pino?.scope, .trackSpecific([2]))
+
+        // "Keyboards by Charlie Hunter and D'Angelo" → two entries
+        XCTAssertTrue(parsed.entries.contains(where: { $0.personName == "Charlie Hunter" && $0.roleRaw == "Keyboards" }))
+        XCTAssertTrue(parsed.entries.contains(where: { $0.personName == "D'Angelo" && $0.roleRaw == "Keyboards" }))
+
+        // Track 1 credits should NOT appear
+        XCTAssertFalse(parsed.entries.contains(where: { $0.personName == "Questlove" }))
+
+        // Album-wide "Mixed by Bob Power" should still appear
+        XCTAssertTrue(parsed.entries.contains(where: { $0.personName == "Bob Power" && $0.roleRaw == "Mixed" }))
+    }
+
+    func testParseWikitableMultiLineCellFormat() {
+        let parser = DefaultWikipediaWikitextParser()
+        let page = WikipediaPageContent(
+            pageID: 11,
+            title: "Multi-Line Table Album",
+            fullURL: "https://en.wikipedia.org/wiki/Multi_Line_Table",
+            wikitext: wikitableMultiLineCellWikitext
+        )
+        let track = NowPlayingTrack(
+            id: "spotify:track:multiline-table",
+            title: "First Song",
+            artist: "Test Artist",
+            album: "Multi-Line Table Album",
+            trackNumber: 1
+        )
+
+        let parsed = parser.parse(page: page, for: track)
+
+        // Track 1 credits from newline-delimited cell format
+        XCTAssertTrue(parsed.entries.contains(where: { $0.personName == "Jane Doe" && $0.roleRaw == "Guitar" }))
+        let jane = parsed.entries.first(where: { $0.personName == "Jane Doe" })
+        XCTAssertEqual(jane?.scope, .trackSpecific([1]))
+
+        // Track 2 should NOT appear for track 1
+        XCTAssertFalse(parsed.entries.contains(where: { $0.personName == "John Smith" }))
+    }
+
+    func testParseWikitableOxfordCommaNames() {
+        let parser = DefaultWikipediaWikitextParser()
+        let page = WikipediaPageContent(
+            pageID: 12,
+            title: "Oxford Comma Album",
+            fullURL: "https://en.wikipedia.org/wiki/Oxford_Comma_Album",
+            wikitext: wikitableOxfordCommaWikitext
+        )
+        let track = NowPlayingTrack(
+            id: "spotify:track:oxford",
+            title: "Track One",
+            artist: "Test Artist",
+            album: "Oxford Comma Album",
+            trackNumber: 1
+        )
+
+        let parsed = parser.parse(page: page, for: track)
+
+        // "Strings: Alice, Bob, and Charlie" → three separate entries
+        XCTAssertTrue(parsed.entries.contains(where: { $0.personName == "Alice" && $0.roleRaw == "Strings" }))
+        XCTAssertTrue(parsed.entries.contains(where: { $0.personName == "Bob" && $0.roleRaw == "Strings" }))
+        XCTAssertTrue(parsed.entries.contains(where: { $0.personName == "Charlie" && $0.roleRaw == "Strings" }))
+    }
+
+    func testParseWikitableRealisticBrownSugarCredits() {
+        let parser = DefaultWikipediaWikitextParser()
+        let page = WikipediaPageContent(
+            pageID: 13,
+            title: "Brown Sugar (D'Angelo album)",
+            fullURL: "https://en.wikipedia.org/wiki/Brown_Sugar_(D%27Angelo_album)",
+            wikitext: wikitableRealisticBrownSugarWikitext
+        )
+        let track = NowPlayingTrack(
+            id: "spotify:track:brown-sugar-realistic",
+            title: "Brown Sugar",
+            artist: "D'Angelo",
+            album: "Brown Sugar",
+            trackNumber: 1
+        )
+
+        let parsed = parser.parse(page: page, for: track)
+
+        // D'Angelo should have writing, production, and musician credits
+        let dangelo = parsed.entries.filter { $0.personName == "D'Angelo" }
+        XCTAssertTrue(dangelo.contains(where: { $0.roleRaw == "Written" && $0.roleGroup == .writing }))
+        XCTAssertTrue(dangelo.contains(where: { $0.roleRaw == "Produced" && $0.roleGroup == .production }))
+        XCTAssertTrue(dangelo.contains(where: { $0.roleRaw == "Vocal arrangements" && $0.roleGroup == .writing }))
+        XCTAssertTrue(dangelo.contains(where: { $0.roleRaw == "Musical arrangements" && $0.roleGroup == .writing }))
+        XCTAssertTrue(dangelo.contains(where: { $0.roleRaw == "All vocals" && $0.roleGroup == .musicians }))
+        XCTAssertTrue(dangelo.contains(where: { $0.roleRaw == "All instruments" && $0.roleGroup == .musicians }))
+
+        // Ali Shaheed Muhammad should have producer + drum programming
+        // (The "Written by" line uses a different spelling — "Muhammed" — which is a real
+        // Wikipedia inconsistency, so it produces a separate entry under that variant name.)
+        let ali = parsed.entries.filter { $0.personName == "Ali Shaheed Muhammad" }
+        XCTAssertTrue(ali.contains(where: { $0.roleRaw == "Produced" }))
+        XCTAssertTrue(ali.contains(where: { $0.roleRaw == "Drum programming" }))
+        // The "Written by" credit uses the "Muhammed" spelling
+        XCTAssertTrue(parsed.entries.contains(where: { $0.personName == "Ali Shaheed Muhammed" && $0.roleRaw == "Written" }))
+
+        // "Mixed by Bob Power at Battery Studios, NYC" → name=Bob Power (location stripped)
+        let bobMixed = parsed.entries.first(where: { $0.personName == "Bob Power" && $0.roleRaw == "Mixed" })
+        XCTAssertNotNil(bobMixed)
+        XCTAssertEqual(bobMixed?.roleGroup, .engineering)
+
+        // "Additional engineering by Tim Latham at Soundtrack, NYC" → name=Tim Latham
+        let tim = parsed.entries.first(where: { $0.personName == "Tim Latham" })
+        XCTAssertNotNil(tim)
+        XCTAssertEqual(tim?.roleRaw, "Additional engineering")
+        XCTAssertEqual(tim?.roleGroup, .engineering)
+
+        // "Recorded at Battery Studios, NYC" → location-only line, no person → skipped
+        XCTAssertFalse(parsed.entries.contains(where: { $0.personName == "Battery Studios" }))
+        XCTAssertFalse(parsed.entries.contains(where: { $0.personName == "NYC" }))
+
+        // "Assistant engineer: G-Spot" → colon format works
+        XCTAssertTrue(parsed.entries.contains(where: { $0.personName == "G-Spot" && $0.roleRaw == "Assistant engineer" }))
+
+        // Album-wide credits: "Mastered by Herb Powers Jr." should appear (location stripped)
+        XCTAssertTrue(parsed.entries.contains(where: { $0.personName == "Herb Powers Jr." && $0.roleRaw == "Mastered" }))
+        // "Additional assistant engineers: Suz Dweyer, Julio Peralta, Martin Czember"
+        XCTAssertTrue(parsed.entries.contains(where: { $0.personName == "Julio Peralta" && $0.scope == .albumWide }))
+
+        // Non-musical album-wide credits should be filtered
+        XCTAssertFalse(parsed.entries.contains(where: { $0.personName == "Henry Marquez" }))
+        XCTAssertFalse(parsed.entries.contains(where: { $0.personName == "Per Gustafson" }))
+
+        // All track 1 D'Angelo entries should be track-scoped
+        XCTAssertTrue(dangelo.allSatisfy { $0.scope == .trackSpecific([1]) })
+    }
+
     func testParseSurvivesSelfClosingRefBeforePersonnelSection() {
         // Self-closing <ref name="X"/> before the Personnel section should not
         // cause the sanitizer to eat the heading. Regression test for a bug where
@@ -435,6 +643,102 @@ private let templateTrackListingWikitext = """
 
 == Personnel ==
 * Template Player – bass (track 2)
+"""
+
+private let wikitablePersonnelWikitext = """
+== Track listing ==
+# "Brown Sugar"
+# "Alright"
+
+== Personnel ==
+{| class="wikitable"
+|-
+! Track !! Title !! Notes
+|-
+|  || || <small>Mixed by [[Bob Power]]<br />Recorded by Russell Elevado<br />A&R: Michael Harris<br />Photography: Carol Friedman<br />Assistant engineer: G-Spot</small>
+|-
+| 1 || "Brown Sugar" || <small>Guitar by [[Bob Power]]<br />Drums by [[Questlove]]<br />Violins: Gerald Tarack, Marilyn Wright</small>
+|-
+| 2 || "Alright" || <small>Bass: Pino Palladino<br />Keyboards by Charlie Hunter and D'Angelo</small>
+|}
+
+== Charts ==
+* placeholder
+"""
+
+private let wikitableRealisticBrownSugarWikitext = """
+== Track listing ==
+# "Brown Sugar"
+# "Alright"
+
+== Personnel ==
+Credits are adapted from the album's liner notes.
+
+{| class="wikitable"
+|-
+!#
+!Title
+!Notes
+|-
+|
+|''Brown Sugar''
+|
+<small>Executive producer: Kedar Massenburg for Kedar Entertainment, Inc. <br />A&R direction: Gary Harris and Kedar Massenburg <br />Management: Kedar Entertainment, Inc. <br />Art direction: Henry Marquez <br />Photography: Per Gustafson <br />Mastered by Herb Powers Jr. at Hit Factory Mastering, NYC <br />Additional assistant engineers: Suz Dweyer, Julio Peralta, Martin Czember</small>
+|-
+|1
+|"Brown Sugar"
+|
+<small>Written by [[D'Angelo]] and Ali Shaheed Muhammed <br />Produced by [[D'Angelo]] and Ali Shaheed Muhammad <br />Vocal arrangements by [[D'Angelo]] <br />All vocals by [[D'Angelo]] <br />Musical arrangements by [[D'Angelo]] <br />All instruments by [[D'Angelo]] <br />Drum programming by Ali Shaheed Muhammad <br />Recorded at Battery Studios, NYC <br />Additional engineering by Tim Latham at Soundtrack, NYC <br />Mixed by [[Bob Power]] at Battery Studios, NYC <br />Assistant engineer: G-Spot</small>
+|-
+|2
+|"Alright"
+|
+<small>Written by [[D'Angelo]] <br />Produced by [[D'Angelo]]</small>
+|}
+
+== Charts ==
+* placeholder
+"""
+
+private let wikitableMultiLineCellWikitext = """
+== Track listing ==
+# "First Song"
+# "Second Song"
+
+== Personnel ==
+{| class="wikitable"
+|-
+! No.
+! Title
+! Notes
+|-
+| 1
+| "First Song"
+| <small>Guitar by Jane Doe<br />Drums by Mike Lee</small>
+|-
+| 2
+| "Second Song"
+| <small>Bass by John Smith</small>
+|}
+
+== Charts ==
+* placeholder
+"""
+
+private let wikitableOxfordCommaWikitext = """
+== Track listing ==
+# "Track One"
+
+== Personnel ==
+{| class="wikitable"
+|-
+! Track !! Title !! Notes
+|-
+| 1 || "Track One" || <small>Strings: Alice, Bob, and Charlie</small>
+|}
+
+== Charts ==
+* placeholder
 """
 
 private let nestedPersonnelWikitext = """

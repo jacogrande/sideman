@@ -147,15 +147,15 @@ enum CreditsMapper {
     private static func roleGroup(for type: String, attributes: [String]) -> CreditRoleGroup {
         let full = ([type] + attributes).joined(separator: " ").lowercased()
 
-        if containsAny(full, ["composer", "lyricist", "writer", "songwriter", "librettist", "author", "arranger", "orchestrator"]) {
+        if containsAny(full, ["composer", "lyricist", "writer", "written", "songwriter", "librettist", "author", "arranger", "arrangement", "orchestrator"]) {
             return .writing
         }
 
-        if containsAny(full, ["producer", "co-producer", "executive producer", "production", "programming", "programmer", "beatmaker"]) {
+        if containsAny(full, ["producer", "produced", "co-producer", "executive producer", "production", "programming", "programmer", "beatmaker"]) {
             return .production
         }
 
-        if containsAny(full, ["engineer", "mix", "mastering", "recording", "assistant engineer", "audio editing", "editing"]) {
+        if containsAny(full, ["engineer", "mix", "mastering", "recorded", "recording", "assistant engineer", "audio editing", "editing"]) {
             return .engineering
         }
 

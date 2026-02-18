@@ -66,6 +66,10 @@ struct DefaultWikipediaWikitextParser: WikipediaWikitextParser {
     }
 
     private func parsePersonnelEntries(from section: String, page: WikipediaPageContent) -> [CreditEntry] {
+        if section.range(of: #"(?m)^\{\|"#, options: .regularExpression) != nil {
+            return parseWikitableCredits(from: section, page: page)
+        }
+
         let lines = section
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -541,6 +545,167 @@ struct DefaultWikipediaWikitextParser: WikipediaWikitextParser {
         }
 
         return nil
+    }
+
+    // MARK: - Wikitable parsing
+
+    private static let creditRoleByNameRegex = makeRegex(#"^([A-Za-z][A-Za-z\s]{0,40}?)\s+by\s+"#, options: [.caseInsensitive])
+
+    private static let nonMusicalRolePrefixes = [
+        "a&r", "management", "business management", "legal representation",
+        "art direction", "art director", "design", "designer", "photography",
+    ]
+
+    private func parseWikitableCredits(from section: String, page: WikipediaPageContent) -> [CreditEntry] {
+        // Strip table-close marker only when it appears on its own line.
+        let cleaned = section.replacingOccurrences(of: #"(?m)^\|}\s*$"#, with: "", options: .regularExpression)
+        let rows = cleaned.components(separatedBy: "|-")
+        var entries: [CreditEntry] = []
+
+        for row in rows {
+            let trimmedRow = row.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedRow.isEmpty else { continue }
+            // Skip table-open markers.
+            guard !trimmedRow.hasPrefix("{|") else { continue }
+            // Skip header rows (cells start with !).
+            guard !trimmedRow.hasPrefix("!") else { continue }
+
+            let cells = extractWikitableCells(from: trimmedRow)
+
+            guard !cells.isEmpty else { continue }
+
+            // First cell may be a track number. Last cell is typically the notes/credits.
+            let firstCell = cells[0].trimmingCharacters(in: .punctuationCharacters.union(.whitespaces))
+            let trackNumber = Int(firstCell)
+            let scope: CreditScope = trackNumber.map { .trackSpecific([$0]) } ?? .albumWide
+
+            // The notes/credits cell is the last cell (or the only cell).
+            let rawNotesCell = cells.count > 1 ? cells[cells.count - 1] : cells[0]
+            let notesCell = rawNotesCell
+                .replacingOccurrences(of: #"</?small>"#, with: "", options: .regularExpression)
+                .replacingOccurrences(of: #"(?i)<br\s*/?>"#, with: "\n", options: .regularExpression)
+            let creditLines = notesCell.components(separatedBy: .newlines)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .map { cleanupWikiMarkup($0) }
+                .filter { !$0.isEmpty }
+
+            for line in creditLines {
+                let parsed = parseInvertedCreditLine(line)
+                for (name, role) in parsed {
+                    guard !isNonMusicalRole(role) else { continue }
+                    let roleGroup = CreditsMapper.roleGroup(forRoleText: role)
+                    let instrument = inferInstrument(role: role, roleGroup: roleGroup)
+                    let sourceLevel: CreditSourceLevel = (scope == .albumWide) ? .release : .recording
+
+                    entries.append(CreditEntry(
+                        personName: name,
+                        roleRaw: role,
+                        roleGroup: roleGroup,
+                        sourceLevel: sourceLevel,
+                        instrument: instrument,
+                        source: .wikipedia,
+                        scope: scope,
+                        sourceURL: page.fullURL,
+                        sourceAttribution: attribution
+                    ))
+                }
+            }
+        }
+
+        return entries
+    }
+
+    /// Extracts cells from a wikitable row, handling both inline `||` and multi-line `|` formats.
+    /// In multi-line format, continuation lines (not starting with `|`) are appended to the current cell.
+    private func extractWikitableCells(from row: String) -> [String] {
+        // Try inline || separator first.
+        let inlineCells = row.components(separatedBy: "||")
+        if inlineCells.count > 1 {
+            return inlineCells
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .map { cell -> String in
+                    var c = cell
+                    if c.hasPrefix("|") { c = String(c.dropFirst()) }
+                    return c.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+                .filter { !$0.isEmpty }
+        }
+
+        // Multi-line format: each | starts a new cell, non-| lines continue the current cell.
+        let lines = row.components(separatedBy: .newlines)
+        var cells: [String] = []
+        var current: String?
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.hasPrefix("|") {
+                if let prev = current {
+                    cells.append(prev)
+                }
+                current = String(trimmed.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines)
+            } else if !trimmed.isEmpty {
+                if current != nil {
+                    current! += "\n" + trimmed
+                }
+            }
+        }
+        if let last = current {
+            cells.append(last)
+        }
+
+        return cells.filter { !$0.isEmpty }
+    }
+
+    private func parseInvertedCreditLine(_ line: String) -> [(name: String, role: String)] {
+        // Try "Role by Name1 and Name2" format (anchored to line start).
+        let nsRange = NSRange(line.startIndex..., in: line)
+        if let match = Self.creditRoleByNameRegex.firstMatch(in: line, options: [], range: nsRange),
+           let fullRange = Range(match.range, in: line),
+           let roleRange = Range(match.range(at: 1), in: line) {
+            let role = String(line[roleRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let namesStr = stripLocationSuffix(String(line[fullRange.upperBound...]))
+            if !role.isEmpty, !namesStr.isEmpty {
+                let names = splitNames(namesStr)
+                if !names.isEmpty {
+                    return names.map { ($0, role) }
+                }
+            }
+        }
+
+        // Try "Role: Name1, Name2" format.
+        if let colonIdx = line.range(of: ": ") {
+            let role = String(line[..<colonIdx.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let namesStr = stripLocationSuffix(String(line[colonIdx.upperBound...]))
+            if !role.isEmpty, !namesStr.isEmpty {
+                let names = splitNames(namesStr)
+                if !names.isEmpty {
+                    return names.map { ($0, role) }
+                }
+            }
+        }
+
+        return []
+    }
+
+    /// Strips " at Studio/Location" suffixes from a names string.
+    private func stripLocationSuffix(_ text: String) -> String {
+        guard let atRange = text.range(of: " at ", options: .caseInsensitive) else {
+            return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return String(text[..<atRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func splitNames(_ text: String) -> [String] {
+        text.components(separatedBy: ", ")
+            .flatMap { $0.components(separatedBy: " and ") }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .map { $0.hasPrefix("and ") ? String($0.dropFirst(4)).trimmingCharacters(in: .whitespaces) : $0 }
+            .filter { !$0.isEmpty }
+    }
+
+    private func isNonMusicalRole(_ role: String) -> Bool {
+        let lowered = role.lowercased()
+        return Self.nonMusicalRolePrefixes.contains { lowered.hasPrefix($0) || lowered == $0 }
     }
 
     private func sanitizeWikitext(_ text: String) -> String {
