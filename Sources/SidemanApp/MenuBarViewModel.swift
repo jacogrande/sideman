@@ -10,6 +10,7 @@ final class MenuBarViewModel: ObservableObject {
     @Published private(set) var creditsBundle: CreditsBundle?
     @Published var resourceSnapshot: ResourceSnapshot?
     @Published var isDiagnosticsVisible = false
+    @Published var isSettingsVisible = false
     @Published var playlistVM = PlaylistViewModel()
 
     private let provider: NowPlayingProvider

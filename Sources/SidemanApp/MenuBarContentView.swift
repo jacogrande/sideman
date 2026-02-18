@@ -5,6 +5,7 @@ import AppKit
 
 struct MenuBarContentView: View {
     @ObservedObject var viewModel: MenuBarViewModel
+    @ObservedObject var spotifyAuthState: SpotifyAuthState
 
     private var status: StatusPresentation {
         switch viewModel.snapshot.state {
@@ -27,6 +28,7 @@ struct MenuBarContentView: View {
                 header
                 contentCard
                 creditsCard
+                settingsCard
                 diagnosticsCard
                 footer
             }
@@ -116,8 +118,113 @@ struct MenuBarContentView: View {
     }
 
     @ViewBuilder
+    private var settingsCard: some View {
+        if viewModel.isSettingsVisible {
+            GlassPanel {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "gearshape.fill")
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.secondary)
+                        Text("Settings")
+                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Spotify Account")
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.secondary)
+
+                        spotifyAccountRow
+                    }
+
+                    Divider()
+                        .overlay(.white.opacity(0.08))
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Debug")
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.secondary)
+
+                        Button {
+                            viewModel.captureDiagnostics()
+                            viewModel.isDiagnosticsVisible = true
+                        } label: {
+                            Label("Run Diagnostics", systemImage: "gauge.with.dots.needle.33percent")
+                        }
+                        .buttonStyle(GlassActionButtonStyle(tint: Color(red: 0.58, green: 0.39, blue: 0.87), isPrimary: false))
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var spotifyAccountRow: some View {
+        switch spotifyAuthState.status {
+        case .notAuthenticated:
+            HStack(spacing: 8) {
+                Image(systemName: "person.crop.circle.badge.xmark")
+                    .foregroundStyle(.secondary)
+                Text("Not connected")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                Button {
+                    Task { await spotifyAuthState.startLogin() }
+                } label: {
+                    Label("Connect Spotify", systemImage: "link")
+                }
+                .buttonStyle(GlassActionButtonStyle(tint: Color(red: 0.27, green: 0.78, blue: 0.55), isPrimary: true))
+            }
+
+        case .authenticating:
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Connecting…")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(.secondary)
+            }
+
+        case .authenticated:
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(Color(red: 0.27, green: 0.78, blue: 0.55))
+                Text("Connected")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                Spacer(minLength: 0)
+                Button {
+                    Task { await spotifyAuthState.logout() }
+                } label: {
+                    Label("Disconnect", systemImage: "person.crop.circle.badge.minus")
+                }
+                .buttonStyle(GlassActionButtonStyle(tint: Color(red: 0.66, green: 0.70, blue: 0.74), isPrimary: false))
+            }
+
+        case .error(let message):
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(Color(red: 0.94, green: 0.36, blue: 0.41))
+                    Text(message)
+                        .font(.system(size: 11, weight: .regular, design: .rounded))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                Button {
+                    Task { await spotifyAuthState.startLogin() }
+                } label: {
+                    Label("Retry", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(GlassActionButtonStyle(tint: Color(red: 0.25, green: 0.63, blue: 0.94), isPrimary: true))
+            }
+        }
+    }
+
+    @ViewBuilder
     private var diagnosticsCard: some View {
-        if viewModel.isDiagnosticsVisible, let snapshot = viewModel.resourceSnapshot {
+        if viewModel.isSettingsVisible, viewModel.isDiagnosticsVisible, let snapshot = viewModel.resourceSnapshot {
             DiagnosticsCardView(snapshot: snapshot)
         }
     }
@@ -152,14 +259,14 @@ struct MenuBarContentView: View {
                 .buttonStyle(GlassActionButtonStyle(tint: Color(red: 0.30, green: 0.72, blue: 0.55), isPrimary: false))
 
                 Button {
-                    viewModel.isDiagnosticsVisible.toggle()
-                    if viewModel.isDiagnosticsVisible {
-                        viewModel.captureDiagnostics()
+                    viewModel.isSettingsVisible.toggle()
+                    if !viewModel.isSettingsVisible {
+                        viewModel.isDiagnosticsVisible = false
                     }
                 } label: {
                     Label(
-                        viewModel.isDiagnosticsVisible ? "Hide Diag" : "Diag",
-                        systemImage: "gauge.with.dots.needle.33percent"
+                        viewModel.isSettingsVisible ? "Hide Settings" : "Settings",
+                        systemImage: "gearshape"
                     )
                 }
                 .buttonStyle(GlassActionButtonStyle(tint: Color(red: 0.58, green: 0.39, blue: 0.87), isPrimary: false))
@@ -256,10 +363,9 @@ struct MenuBarContentView: View {
 
                                 ForEach(rows, id: \.id) { row in
                                     CreditPersonRow(row: row, hasMatchedTrack: bundle.matchedTrackNumber != nil) { tappedRow in
-                                        guard let mbid = tappedRow.personMBID else { return }
                                         viewModel.playlistVM.beginFlow(
                                             personName: tappedRow.personName,
-                                            personMBID: mbid,
+                                            personMBID: tappedRow.personMBID,
                                             roles: tappedRow.roles,
                                             roleGroup: group
                                         )
@@ -476,7 +582,7 @@ private struct CreditPersonRow: View {
     @State private var isHovered = false
 
     private var isTappable: Bool {
-        row.personMBID != nil && onPersonTapped != nil
+        onPersonTapped != nil
     }
 
     var body: some View {
@@ -745,7 +851,7 @@ private struct AmbientGlassBackground: View {
         ),
         at: Date()
     )
-    return MenuBarContentView(viewModel: vm)
+    return MenuBarContentView(viewModel: vm, spotifyAuthState: SpotifyAuthState())
 }
 
 private actor PreviewProvider: NowPlayingProvider {

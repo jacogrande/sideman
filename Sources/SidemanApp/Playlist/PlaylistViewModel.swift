@@ -5,7 +5,7 @@ import AppKit
 
 struct PersonContext: Equatable {
     let personName: String
-    let personMBID: String
+    var personMBID: String?
     let roles: [String]
     let roleGroup: CreditRoleGroup?
 }
@@ -13,6 +13,7 @@ struct PersonContext: Equatable {
 enum PlaylistFlowPhase: Equatable {
     case idle
     case confirming(PersonContext)
+    case resolvingArtist
     case authenticating
     case building(PlaylistBuildStage)
     case completed(PlaylistBuildResult)
@@ -21,6 +22,7 @@ enum PlaylistFlowPhase: Equatable {
 
 @MainActor
 final class PlaylistViewModel: ObservableObject {
+    private static let artistSearchMinScore = 80
     @Published fileprivate(set) var phase: PlaylistFlowPhase = .idle
     @Published var selectedRoleFilter: CreditRoleGroup?
     @Published var isPublic: Bool = false
@@ -28,14 +30,16 @@ final class PlaylistViewModel: ObservableObject {
     private var buildTask: Task<Void, Never>?
     private var playlistBuilder: PlaylistBuilder?
     private var spotifyAuthState: SpotifyAuthState?
+    private var musicBrainzClient: MusicBrainzClient?
     private var lastResult: PlaylistBuildResult?
 
-    func configure(builder: PlaylistBuilder, authState: SpotifyAuthState) {
+    func configure(builder: PlaylistBuilder, authState: SpotifyAuthState, musicBrainzClient: MusicBrainzClient) {
         self.playlistBuilder = builder
         self.spotifyAuthState = authState
+        self.musicBrainzClient = musicBrainzClient
     }
 
-    func beginFlow(personName: String, personMBID: String, roles: [String], roleGroup: CreditRoleGroup?) {
+    func beginFlow(personName: String, personMBID: String? = nil, roles: [String], roleGroup: CreditRoleGroup?) {
         let context = PersonContext(
             personName: personName,
             personMBID: personMBID,
@@ -48,7 +52,7 @@ final class PlaylistViewModel: ObservableObject {
     }
 
     func confirmAndCreate() {
-        guard case .confirming(let context) = phase, buildTask == nil else { return }
+        guard case .confirming(var context) = phase, buildTask == nil else { return }
 
         guard let authState = spotifyAuthState, let builder = playlistBuilder else {
             phase = .failed("Playlist builder not configured")
@@ -57,6 +61,37 @@ final class PlaylistViewModel: ObservableObject {
 
         buildTask = Task { [weak self] in
             guard let self else { return }
+
+            // Resolve MBID if not already known
+            if context.personMBID == nil {
+                self.phase = .resolvingArtist
+                guard let mbClient = self.musicBrainzClient else {
+                    self.phase = .failed("MusicBrainz client not configured")
+                    return
+                }
+
+                do {
+                    let results = try await mbClient.searchArtists(name: context.personName)
+                    guard let best = results.first, best.score >= Self.artistSearchMinScore else {
+                        self.phase = .failed("Could not find \"\(context.personName)\" on MusicBrainz.")
+                        DebugLogger.log(.ui, "artist search no match for '\(context.personName)'")
+                        self.buildTask = nil
+                        return
+                    }
+                    context.personMBID = best.id
+                    DebugLogger.log(.ui, "artist search resolved '\(context.personName)' → \(best.id) (score=\(best.score))")
+                } catch {
+                    self.phase = .failed("MusicBrainz search failed: \(error.localizedDescription)")
+                    self.buildTask = nil
+                    return
+                }
+            }
+
+            guard let artistMBID = context.personMBID else {
+                self.phase = .failed("No MusicBrainz ID found.")
+                self.buildTask = nil
+                return
+            }
 
             // Check auth
             let isAuthed = await authState.client.isAuthenticated
@@ -76,7 +111,7 @@ final class PlaylistViewModel: ObservableObject {
             }
 
             let request = PlaylistBuildRequest(
-                artistMBID: context.personMBID,
+                artistMBID: artistMBID,
                 artistName: context.personName,
                 roleFilter: self.selectedRoleFilter,
                 isPublic: self.isPublic

@@ -10,6 +10,8 @@ struct PlaylistFlowView: View {
                 EmptyView()
             case .confirming(let context):
                 PlaylistConfirmationView(context: context, viewModel: viewModel)
+            case .resolvingArtist:
+                ArtistSearchView(viewModel: viewModel)
             case .authenticating:
                 SpotifyAuthPromptView(viewModel: viewModel)
             case .building(let stage):
@@ -119,6 +121,40 @@ private struct RoleFilterCapsule: View {
                 .foregroundStyle(isSelected ? Color(red: 0.27, green: 0.78, blue: 0.55) : .secondary)
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Artist Search
+
+private struct ArtistSearchView: View {
+    @ObservedObject var viewModel: PlaylistViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color(red: 0.27, green: 0.78, blue: 0.55))
+                Text("Finding Artist")
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                Spacer()
+            }
+
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Searching MusicBrainz…")
+                    .font(.system(size: 12, weight: .regular, design: .rounded))
+                    .foregroundStyle(.secondary)
+            }
+
+            Button {
+                viewModel.cancel()
+            } label: {
+                Label("Cancel", systemImage: "xmark")
+            }
+            .buttonStyle(GlassActionButtonStyle(tint: .gray, isPrimary: false))
+        }
     }
 }
 

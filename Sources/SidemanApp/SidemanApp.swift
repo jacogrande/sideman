@@ -14,13 +14,14 @@ struct SidemanApp: App {
         DebugLogger.log(.app, "credits backend=\(backend.rawValue)")
 
         let spotifyAuth = SpotifyAuthState()
+        let musicBrainzClient = MusicBrainzHTTPClient()
         let playlistBuilder = CreditsProviderFactory.makePlaylistBuilder(spotifyClient: spotifyAuth.client)
 
         let vm = MenuBarViewModel(
             provider: nowPlayingProvider,
             creditsProvider: creditsProvider
         )
-        vm.playlistVM.configure(builder: playlistBuilder, authState: spotifyAuth)
+        vm.playlistVM.configure(builder: playlistBuilder, authState: spotifyAuth, musicBrainzClient: musicBrainzClient)
 
         _viewModel = StateObject(wrappedValue: vm)
         _spotifyAuthState = StateObject(wrappedValue: spotifyAuth)
@@ -28,7 +29,7 @@ struct SidemanApp: App {
 
     var body: some Scene {
         MenuBarExtra("Sideman", systemImage: "music.note") {
-            MenuBarContentView(viewModel: viewModel)
+            MenuBarContentView(viewModel: viewModel, spotifyAuthState: spotifyAuthState)
                 .task {
                     await spotifyAuthState.restoreSession()
                 }
