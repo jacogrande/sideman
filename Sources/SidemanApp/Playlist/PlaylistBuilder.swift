@@ -162,7 +162,7 @@ actor PlaylistBuilder {
 
     private func buildPlaylistName(request: PlaylistBuildRequest) -> String {
         if let role = request.roleFilter {
-            return "\(request.artistName) as a \(role.filterLabel.lowercased())"
+            return "\(request.artistName) — \(role.filterLabel)"
         }
         return "\(request.artistName) — all credits"
     }

@@ -99,7 +99,6 @@ final class MenuBarViewModel: ObservableObject {
         }
 
         guard latestSnapshot.state == .playing, let track = latestSnapshot.track else {
-            DebugLogger.log(.provider, "credits reset: playback not active")
             resetCreditsState()
             return
         }
