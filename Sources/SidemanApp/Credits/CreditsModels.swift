@@ -345,3 +345,132 @@ struct CachedCredits: Equatable, Codable {
         Date() >= expiresAt
     }
 }
+
+// MARK: - Discography
+
+struct ArtistRecordingRel: Equatable, Codable {
+    let recordingMBID: String
+    let recordingTitle: String
+    let relationshipType: String
+    let attributes: [String]
+    let artistCredits: [String]
+}
+
+struct DiscographyResult: Equatable, Codable {
+    let artistMBID: String
+    let artistName: String
+    let recordings: [ArtistRecordingRel]
+    let fetchedAt: Date
+}
+
+struct MBBrowseRecordingsPage: Equatable {
+    let recordings: [ArtistRecordingRel]
+    let totalCount: Int
+    let offset: Int
+}
+
+struct MBArtistSearchResult: Equatable {
+    let id: String
+    let name: String
+    let score: Int
+}
+
+// MARK: - Popularity
+
+struct RecordingPopularity: Equatable, Codable {
+    let recordingMBID: String
+    let listenCount: Int?
+}
+
+// MARK: - Track Matching
+
+struct ResolvedTrack: Equatable {
+    let recordingMBID: String
+    let recordingTitle: String
+    let spotifyURI: String
+    let spotifyPopularity: Int?
+    let matchStrategy: TrackMatchStrategy
+}
+
+enum TrackMatchStrategy: String, Equatable, Codable {
+    case isrc
+    case textSearch
+}
+
+// MARK: - Spotify Domain Models
+
+struct SpotifyTrack: Equatable {
+    let id: String
+    let name: String
+    let uri: String
+    let artistNames: [String]
+    let albumName: String
+    let isrc: String?
+    let popularity: Int?
+}
+
+struct SpotifyPlaylist: Equatable {
+    let id: String
+    let name: String
+    let url: String?
+}
+
+// MARK: - Spotify Auth
+
+struct SpotifyTokens: Codable, Equatable {
+    let accessToken: String
+    let refreshToken: String
+    let expiresAt: Date
+
+    var isExpired: Bool {
+        Date() >= expiresAt
+    }
+
+    var isExpiringSoon: Bool {
+        Date() >= expiresAt.addingTimeInterval(-300)
+    }
+}
+
+// MARK: - Playlist Building
+
+struct PlaylistBuildRequest {
+    let artistMBID: String
+    let artistName: String
+    let roleFilter: CreditRoleGroup?
+    let isPublic: Bool
+    let maxTracks: Int
+
+    init(artistMBID: String, artistName: String, roleFilter: CreditRoleGroup? = nil, isPublic: Bool = false, maxTracks: Int = 50) {
+        self.artistMBID = artistMBID
+        self.artistName = artistName
+        self.roleFilter = roleFilter
+        self.isPublic = isPublic
+        self.maxTracks = maxTracks
+    }
+}
+
+struct PlaylistBuildResult: Equatable {
+    let playlistName: String
+    let playlistURI: String
+    let trackCount: Int
+    let skippedCount: Int
+}
+
+// MARK: - Playlist Errors
+
+enum SpotifyClientError: Error, Equatable {
+    case notAuthenticated
+    case authenticationFailed(String)
+    case authenticationCancelled
+    case rateLimited
+    case notFound
+    case httpStatus(Int)
+    case decoding(String)
+    case network(String)
+    case tokenRefreshFailed(String)
+}
+
+enum PlaylistBuilderError: Error, Equatable {
+    case noRecordingsFound
+    case noTracksResolved
+}

@@ -131,4 +131,11 @@ private actor StubMusicBrainzClient: MusicBrainzClient {
     func getRelease(id: String) async throws -> MBReleaseDetail {
         MBReleaseDetail(id: id, title: "", relations: [])
     }
+
+    func getArtistRecordingRels(id: String) async throws -> [ArtistRecordingRel] { [] }
+    func browseRecordings(artistID: String, offset: Int, limit: Int, includeISRCs: Bool) async throws -> MBBrowseRecordingsPage {
+        MBBrowseRecordingsPage(recordings: [], totalCount: 0, offset: 0)
+    }
+    func getRecordingISRCs(id: String) async throws -> [String] { [] }
+    func searchArtists(name: String) async throws -> [MBArtistSearchResult] { [] }
 }

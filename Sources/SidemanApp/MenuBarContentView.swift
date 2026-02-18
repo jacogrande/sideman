@@ -179,17 +179,29 @@ struct MenuBarContentView: View {
 
     private var creditsCard: some View {
         GlassPanel {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text("Credits")
-                        .font(.system(size: 14, weight: .semibold, design: .rounded))
-                    Spacer(minLength: 0)
-                    Text(creditsStateLabel)
-                        .font(.system(size: 10, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.secondary)
-                }
+            if viewModel.playlistVM.phase != .idle {
+                PlaylistFlowView(viewModel: viewModel.playlistVM)
+                    .transition(.push(from: .trailing))
+            } else {
+                creditsCardContent
+            }
+        }
+        .animation(.easeInOut(duration: 0.25), value: viewModel.playlistVM.phase != .idle)
+    }
 
-                switch viewModel.creditsState {
+    @ViewBuilder
+    private var creditsCardContent: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Credits")
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                Spacer(minLength: 0)
+                Text(creditsStateLabel)
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
+            }
+
+            switch viewModel.creditsState {
                 case .idle:
                     Text("Credits load automatically when a track is playing.")
                         .font(.system(size: 12, weight: .regular, design: .rounded))
@@ -225,7 +237,6 @@ struct MenuBarContentView: View {
                 case .loaded:
                     loadedCreditsContent
                 }
-            }
         }
     }
 
@@ -243,7 +254,15 @@ struct MenuBarContentView: View {
                                     .foregroundStyle(.secondary)
 
                                 ForEach(rows, id: \.id) { row in
-                                    CreditPersonRow(row: row, hasMatchedTrack: bundle.matchedTrackNumber != nil)
+                                    CreditPersonRow(row: row, hasMatchedTrack: bundle.matchedTrackNumber != nil) { tappedRow in
+                                        guard let mbid = tappedRow.personMBID else { return }
+                                        viewModel.playlistVM.beginFlow(
+                                            personName: tappedRow.personName,
+                                            personMBID: mbid,
+                                            roles: tappedRow.roles,
+                                            roleGroup: group
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -395,12 +414,14 @@ private struct LoadingCreditsView: View {
 private struct AggregatedCreditRow: Hashable {
     let id: String
     let personName: String
+    let personMBID: String?
     let roles: [String]
     let scopeLabels: [String]
 }
 
 private struct AggregatedCreditBuilder {
     let personName: String
+    private(set) var personMBID: String?
     private(set) var roles: [String] = []
     private(set) var roleSet: Set<String> = []
     private(set) var scopeLabels: [String] = []
@@ -418,12 +439,17 @@ private struct AggregatedCreditBuilder {
             scopeSet.insert(scopeLabel)
             scopeLabels.append(scopeLabel)
         }
+
+        if personMBID == nil, let mbid = entry.personMBID, !mbid.isEmpty {
+            personMBID = mbid
+        }
     }
 
     func build(id: String) -> AggregatedCreditRow {
         AggregatedCreditRow(
             id: id,
             personName: personName,
+            personMBID: personMBID,
             roles: roles,
             scopeLabels: scopeLabels
         )
@@ -444,13 +470,42 @@ private struct AggregatedCreditBuilder {
 private struct CreditPersonRow: View {
     let row: AggregatedCreditRow
     var hasMatchedTrack: Bool = false
+    var onPersonTapped: ((AggregatedCreditRow) -> Void)?
+
+    @State private var isHovered = false
+
+    private var isTappable: Bool {
+        row.personMBID != nil && onPersonTapped != nil
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(row.personName)
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .lineLimit(1)
+                if isTappable {
+                    Text(row.personName)
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .lineLimit(1)
+                        .underline(isHovered)
+                        .foregroundStyle(isHovered ? Color(red: 0.36, green: 0.72, blue: 0.96) : .primary)
+                        .onHover { hovering in
+                            isHovered = hovering
+                            #if canImport(AppKit)
+                            if hovering {
+                                NSCursor.pointingHand.push()
+                            } else {
+                                NSCursor.pop()
+                            }
+                            #endif
+                        }
+                        .onTapGesture {
+                            onPersonTapped?(row)
+                        }
+                } else {
+                    Text(row.personName)
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .lineLimit(1)
+                        .help(row.personMBID == nil ? "MusicBrainz profile not found" : "")
+                }
 
                 Spacer(minLength: 0)
 
@@ -628,52 +683,6 @@ struct GlassPanel<Content: View>: View {
                     )
             )
             .shadow(color: Color.black.opacity(0.16), radius: 22, x: 0, y: 10)
-    }
-}
-
-private struct GlassActionButtonStyle: ButtonStyle {
-    let tint: Color
-    let isPrimary: Bool
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 11, weight: .semibold, design: .rounded))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(buttonFill(configuration: configuration))
-            .overlay(
-                Capsule()
-                    .strokeBorder(borderColor, lineWidth: 0.8)
-            )
-            .foregroundStyle(isPrimary ? Color.white : tint)
-            .brightness(configuration.isPressed ? -0.08 : 0)
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .animation(.easeOut(duration: 0.14), value: configuration.isPressed)
-    }
-
-    @ViewBuilder
-    private func buttonFill(configuration: Configuration) -> some View {
-        if isPrimary {
-            Capsule()
-                .fill(
-                LinearGradient(
-                    colors: [
-                            tint,
-                            tint
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-                )
-                .shadow(color: tint, radius: configuration.isPressed ? 0 : 4, x: 0, y: 2)
-        } else {
-            Capsule()
-                .fill(.thinMaterial)
-        }
-    }
-
-    private var borderColor: Color {
-        isPrimary ? Color.white : tint
     }
 }
 

@@ -111,6 +111,104 @@ actor MusicBrainzHTTPClient: MusicBrainzClient {
         )
     }
 
+    func getArtistRecordingRels(id: String) async throws -> [ArtistRecordingRel] {
+        DebugLogger.log(.network, "getArtistRecordingRels id=\(id)")
+        let endpoint = Endpoint(
+            path: "artist/\(id)",
+            queryItems: [
+                URLQueryItem(name: "inc", value: "recording-rels"),
+                URLQueryItem(name: "fmt", value: "json")
+            ]
+        )
+
+        let payload: ArtistRecordingRelsDTO = try await request(endpoint: endpoint)
+        DebugLogger.log(.network, "getArtistRecordingRels returned \(payload.relations.count) relations")
+
+        return payload.relations.compactMap { rel in
+            guard let recording = rel.recording else { return nil }
+            return ArtistRecordingRel(
+                recordingMBID: recording.id,
+                recordingTitle: recording.title,
+                relationshipType: rel.type,
+                attributes: rel.attributes,
+                artistCredits: recording.artistCredit.map(\.name)
+            )
+        }
+    }
+
+    func browseRecordings(artistID: String, offset: Int, limit: Int, includeISRCs: Bool) async throws -> MBBrowseRecordingsPage {
+        DebugLogger.log(.network, "browseRecordings artistID=\(artistID) offset=\(offset) limit=\(limit)")
+        var incParts = ["artist-credits"]
+        if includeISRCs {
+            incParts.append("isrcs")
+        }
+
+        let endpoint = Endpoint(
+            path: "recording",
+            queryItems: [
+                URLQueryItem(name: "artist", value: artistID),
+                URLQueryItem(name: "limit", value: String(limit)),
+                URLQueryItem(name: "offset", value: String(offset)),
+                URLQueryItem(name: "inc", value: incParts.joined(separator: "+")),
+                URLQueryItem(name: "fmt", value: "json")
+            ]
+        )
+
+        let payload: BrowseRecordingsDTO = try await request(endpoint: endpoint)
+        DebugLogger.log(.network, "browseRecordings returned \(payload.recordings.count)/\(payload.recordingCount) recordings")
+
+        let recordings = payload.recordings.map { rec in
+            ArtistRecordingRel(
+                recordingMBID: rec.id,
+                recordingTitle: rec.title,
+                relationshipType: "main",
+                attributes: [],
+                artistCredits: rec.artistCredit.map(\.name)
+            )
+        }
+
+        return MBBrowseRecordingsPage(
+            recordings: recordings,
+            totalCount: payload.recordingCount,
+            offset: payload.recordingOffset
+        )
+    }
+
+    func getRecordingISRCs(id: String) async throws -> [String] {
+        DebugLogger.log(.network, "getRecordingISRCs id=\(id)")
+        let endpoint = Endpoint(
+            path: "recording/\(id)",
+            queryItems: [
+                URLQueryItem(name: "inc", value: "isrcs"),
+                URLQueryItem(name: "fmt", value: "json")
+            ]
+        )
+
+        let payload: RecordingISRCsDTO = try await request(endpoint: endpoint)
+        DebugLogger.log(.network, "getRecordingISRCs returned \(payload.isrcs.count) ISRCs")
+        return payload.isrcs
+    }
+
+    func searchArtists(name: String) async throws -> [MBArtistSearchResult] {
+        DebugLogger.log(.network, "searchArtists name='\(name)'")
+        let escapedName = escapeQueryValue(name)
+        let endpoint = Endpoint(
+            path: "artist",
+            queryItems: [
+                URLQueryItem(name: "query", value: "artist:\"\(escapedName)\""),
+                URLQueryItem(name: "fmt", value: "json"),
+                URLQueryItem(name: "limit", value: "3")
+            ]
+        )
+
+        let payload: ArtistSearchResponseDTO = try await request(endpoint: endpoint)
+        DebugLogger.log(.network, "searchArtists returned \(payload.artists.count) results")
+
+        return payload.artists.map {
+            MBArtistSearchResult(id: $0.id, name: $0.name, score: $0.score)
+        }
+    }
+
     private func request<T: Decodable>(endpoint: Endpoint, attempt: Int = 0) async throws -> T {
         await paceRequests()
 
@@ -368,4 +466,153 @@ private struct ArtistDTO: Decodable {
 private struct WorkReferenceDTO: Decodable {
     let id: String
     let title: String
+}
+
+// MARK: - Artist Recording Rels DTOs
+
+private struct ArtistRecordingRelsDTO: Decodable {
+    let relations: [ArtistRelationDTO]
+
+    enum CodingKeys: String, CodingKey {
+        case relations
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        relations = try container.decodeIfPresent([ArtistRelationDTO].self, forKey: .relations) ?? []
+    }
+}
+
+private struct ArtistRelationDTO: Decodable {
+    let type: String
+    let attributes: [String]
+    let recording: RecordingRefDTO?
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case attributes
+        case recording
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        type = try container.decodeIfPresent(String.self, forKey: .type) ?? "unknown"
+        attributes = try container.decodeIfPresent([String].self, forKey: .attributes) ?? []
+        recording = try container.decodeIfPresent(RecordingRefDTO.self, forKey: .recording)
+    }
+}
+
+private struct RecordingRefDTO: Decodable {
+    let id: String
+    let title: String
+    let artistCredit: [ArtistCreditDTO]
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case artistCredit = "artist-credit"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        artistCredit = try container.decodeIfPresent([ArtistCreditDTO].self, forKey: .artistCredit) ?? []
+    }
+}
+
+// MARK: - Browse Recordings DTOs
+
+private struct BrowseRecordingsDTO: Decodable {
+    let recordings: [BrowseRecordingDTO]
+    let recordingCount: Int
+    let recordingOffset: Int
+
+    enum CodingKeys: String, CodingKey {
+        case recordings
+        case recordingCount = "recording-count"
+        case recordingOffset = "recording-offset"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        recordings = try container.decodeIfPresent([BrowseRecordingDTO].self, forKey: .recordings) ?? []
+        recordingCount = try container.decodeIfPresent(Int.self, forKey: .recordingCount) ?? 0
+        recordingOffset = try container.decodeIfPresent(Int.self, forKey: .recordingOffset) ?? 0
+    }
+}
+
+private struct BrowseRecordingDTO: Decodable {
+    let id: String
+    let title: String
+    let artistCredit: [ArtistCreditDTO]
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case artistCredit = "artist-credit"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        artistCredit = try container.decodeIfPresent([ArtistCreditDTO].self, forKey: .artistCredit) ?? []
+    }
+}
+
+// MARK: - Recording ISRCs DTO
+
+private struct RecordingISRCsDTO: Decodable {
+    let isrcs: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case isrcs
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        isrcs = try container.decodeIfPresent([String].self, forKey: .isrcs) ?? []
+    }
+}
+
+// MARK: - Artist Search DTOs
+
+private struct ArtistSearchResponseDTO: Decodable {
+    let artists: [ArtistSearchResultDTO]
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        artists = try container.decodeIfPresent([ArtistSearchResultDTO].self, forKey: .artists) ?? []
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case artists
+    }
+}
+
+private struct ArtistSearchResultDTO: Decodable {
+    let id: String
+    let name: String
+    let score: Int
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        if let intScore = try? container.decode(Int.self, forKey: .score) {
+            score = intScore
+        } else if let stringScore = try? container.decode(String.self, forKey: .score),
+                  let intScore = Int(stringScore) {
+            score = intScore
+        } else {
+            score = 0
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case score
+    }
 }

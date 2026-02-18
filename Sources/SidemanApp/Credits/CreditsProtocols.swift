@@ -5,6 +5,10 @@ protocol MusicBrainzClient {
     func getRecording(id: String) async throws -> MBRecordingDetail
     func getWork(id: String) async throws -> MBWorkDetail
     func getRelease(id: String) async throws -> MBReleaseDetail
+    func getArtistRecordingRels(id: String) async throws -> [ArtistRecordingRel]
+    func browseRecordings(artistID: String, offset: Int, limit: Int, includeISRCs: Bool) async throws -> MBBrowseRecordingsPage
+    func getRecordingISRCs(id: String) async throws -> [String]
+    func searchArtists(name: String) async throws -> [MBArtistSearchResult]
 }
 
 protocol WikipediaAPIClient {
@@ -40,4 +44,13 @@ protocol CreditsCache {
     func get(for key: String) async -> CachedCredits?
     func set(_ value: CachedCredits, for key: String) async
     func remove(for key: String) async
+}
+
+protocol SpotifyWebAPI {
+    var isAuthenticated: Bool { get async }
+    func searchTrackByISRC(_ isrc: String) async throws -> [SpotifyTrack]
+    func searchTracks(title: String, artist: String) async throws -> [SpotifyTrack]
+    func createPlaylist(name: String, description: String, isPublic: Bool) async throws -> SpotifyPlaylist
+    func addTracksToPlaylist(playlistID: String, trackURIs: [String]) async throws
+    func getCurrentUserID() async throws -> String
 }

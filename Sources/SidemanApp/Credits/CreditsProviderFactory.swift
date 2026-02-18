@@ -24,6 +24,26 @@ enum CreditsBackend: String {
 }
 
 enum CreditsProviderFactory {
+    static func makePlaylistBuilder(spotifyClient: SpotifyWebAPI) -> PlaylistBuilder {
+        let musicBrainzClient = MusicBrainzHTTPClient()
+        let discographyCache = DiscographyCache()
+        let discographyService = ArtistDiscographyService(
+            musicBrainzClient: musicBrainzClient,
+            cache: discographyCache
+        )
+        let listenBrainzClient = ListenBrainzClient()
+        let trackMatchingService = TrackMatchingService(
+            musicBrainzClient: musicBrainzClient,
+            spotifyClient: spotifyClient
+        )
+        return PlaylistBuilder(
+            discographyService: discographyService,
+            listenBrainzClient: listenBrainzClient,
+            trackMatchingService: trackMatchingService,
+            spotifyClient: spotifyClient
+        )
+    }
+
     static func makeProvider(backend: CreditsBackend, cache: CreditsCache) -> CreditsProvider {
         let wikipediaClient = WikipediaAPIClientImpl()
         let wikipediaResolver = DefaultWikipediaPageResolver(client: wikipediaClient)

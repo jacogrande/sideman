@@ -159,6 +159,13 @@ private actor StubClient: MusicBrainzClient {
         }
         throw MusicBrainzClientError.notFound
     }
+
+    func getArtistRecordingRels(id: String) async throws -> [ArtistRecordingRel] { [] }
+    func browseRecordings(artistID: String, offset: Int, limit: Int, includeISRCs: Bool) async throws -> MBBrowseRecordingsPage {
+        MBBrowseRecordingsPage(recordings: [], totalCount: 0, offset: 0)
+    }
+    func getRecordingISRCs(id: String) async throws -> [String] { [] }
+    func searchArtists(name: String) async throws -> [MBArtistSearchResult] { [] }
 }
 
 private actor StubCreditsCache: CreditsCache {

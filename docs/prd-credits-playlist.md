@@ -177,8 +177,8 @@ The pipeline works best for artists with substantial MusicBrainz data. For obscu
 
 ## Files to create/modify
 
-| File                                                       | Change                                                                     |
-| ---------------------------------------------------------- | -------------------------------------------------------------------------- |
+| File                                                        | Change                                                                     |
+| ----------------------------------------------------------- | -------------------------------------------------------------------------- |
 | `Sources/SidemanApp/Spotify/SpotifyWebAPIClient.swift`      | New — OAuth 2.0 PKCE flow, token management, playlist CRUD                 |
 | `Sources/SidemanApp/Spotify/SpotifyAuthState.swift`         | New — Published auth state for UI binding                                  |
 | `Sources/SidemanApp/Credits/ArtistDiscographyService.swift` | New — Fetches + filters recording-rels from MusicBrainz                    |
@@ -189,7 +189,7 @@ The pipeline works best for artists with substantial MusicBrainz data. For obscu
 | `Sources/SidemanApp/MenuBarContentView.swift`               | Modify — Make person names tappable, add playlist creation popover         |
 | `Sources/SidemanApp/Credits/CreditsModels.swift`            | Modify — Add `MBArtistDiscography` model                                   |
 | `Sources/SidemanApp/Credits/MusicBrainzHTTPClient.swift`    | Modify — Add `getArtistRecordingRels(id:)` method                          |
-| `SupportFiles/Info.plist`                                  | Modify — Add URL scheme for OAuth callback                                 |
+| `SupportFiles/Info.plist`                                   | Modify — Add URL scheme for OAuth callback                                 |
 
 ## Performance considerations
 
@@ -203,9 +203,12 @@ The pipeline works best for artists with substantial MusicBrainz data. For obscu
 
 **Total worst case:** ~2 minutes for 100 tracks with full ISRC resolution. **Realistic case** (50% ISRC hit from browse, 50% text search): ~30 seconds.
 
-## Open questions
+## Decisions (formerly open questions)
 
-1. **Spotify app registration:** Do we want to ship with a hardcoded `client_id`, or require users to register their own app? Hardcoded is simpler UX but means the client ID is in the binary.
-2. **Rate limiting strategy for MusicBrainz:** The existing 1 req/sec pacer works for single-track lookups. Fetching ISRCs for 100 recordings sequentially takes 100s. Should we add a dedicated "bulk worker" queue that runs in the background?
-3. **ListenBrainz vs. Spotify popularity:** ListenBrainz is free and auth-less but has lower coverage. Spotify popularity is comprehensive but we only get it after matching. Use ListenBrainz for initial ranking and optionally re-sort by Spotify popularity?
-4. **Wikipedia-only credits:** Some `CreditEntry` items come from Wikipedia parsing and lack `personMBID`. Should we attempt a MusicBrainz artist search by name as a bridge, or treat these as non-actionable?
+1. **Spotify app registration:** Ship with a **hardcoded `client_id`**. The client ID is not a secret in OAuth PKCE flows — that's the entire point of PKCE (no client secret). Requiring users to register a Spotify developer app would kill adoption. The ID is visible in the binary but can only be used with PKCE, which requires user consent in the browser.
+
+2. **Rate limiting strategy for MusicBrainz:** **Add a dedicated background bulk worker queue.** Lean on the browse endpoint (`/ws/2/recording?artist={MBID}&inc=isrcs`) first — it covers main-artist tracks in pages of 100. For session-work recordings that need individual ISRC lookups, run those on the bulk queue at 1 req/sec with live progress updates ("Resolving track 47 of 83..."). Cancellation support is essential.
+
+3. **ListenBrainz vs. Spotify popularity:** **Use both, in sequence.** ListenBrainz first (free, auth-less, single batch POST) for initial ranking and pre-filtering — avoids wasting Spotify searches on obscure recordings. Then re-sort the final playlist by Spotify popularity, which comes free from the search results. Best of both worlds at zero extra API cost.
+
+4. **Wikipedia-only credits:** **Attempt a lightweight MusicBrainz artist search by name** (`GET /ws/2/artist?query=name:"Name"&fmt=json&limit=3`). If we get a high-confidence match (exact name, score > 90), use it. Otherwise, show the name as non-tappable with a tooltip: "MusicBrainz profile not found for this person." This catches well-known musicians without creating false-positive playlists for ambiguous names.
