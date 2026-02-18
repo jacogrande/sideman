@@ -142,7 +142,7 @@ actor SpotifyWebAPIClient: SpotifyWebAPI {
             let body = try JSONSerialization.data(withJSONObject: ["uris": chunk])
             let _: SpotifySnapshotDTO = try await authenticatedRequest(
                 method: "POST",
-                path: "playlists/\(playlistID)/tracks",
+                path: "playlists/\(playlistID)/items",
                 body: body
             )
         }
