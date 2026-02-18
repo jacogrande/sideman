@@ -3,39 +3,108 @@ import Foundation
 actor TrackMatchingService {
     private let musicBrainzClient: MusicBrainzClient
     private let spotifyClient: SpotifyWebAPI
+    private let maxConcurrency: Int
 
-    init(musicBrainzClient: MusicBrainzClient, spotifyClient: SpotifyWebAPI) {
+    init(musicBrainzClient: MusicBrainzClient, spotifyClient: SpotifyWebAPI, maxConcurrency: Int = 8) {
         self.musicBrainzClient = musicBrainzClient
         self.spotifyClient = spotifyClient
+        self.maxConcurrency = maxConcurrency
     }
 
     func resolveToSpotify(
         recordings: [ArtistRecordingRel],
-        onProgress: @Sendable (Int, Int) async -> Void
+        onProgress: @escaping @Sendable (Int, Int) async -> Void
     ) async throws -> [ResolvedTrack] {
-        var resolved: [ResolvedTrack] = []
         let total = recordings.count
+        guard total > 0 else { return [] }
 
-        for (index, recording) in recordings.enumerated() {
+        // Shared mutable state protected by actor isolation via the progress closure
+        let progressCounter = ProgressCounter(total: total, onProgress: onProgress)
+
+        // Process in concurrent batches. If Spotify rate-limits us, we shrink the
+        // batch size and retry the failed items rather than aborting.
+        var pending = Array(recordings.enumerated())
+        var allResolved: [ResolvedTrack] = []
+        var currentConcurrency = maxConcurrency
+
+        while !pending.isEmpty {
             try Task.checkCancellation()
-            await onProgress(index, total)
 
-            if let track = try await resolveViaISRC(recording: recording) {
-                resolved.append(track)
-                continue
+            let batch = Array(pending.prefix(currentConcurrency))
+            pending.removeFirst(batch.count)
+
+            let results = try await resolveBatch(batch, progressCounter: progressCounter)
+
+            var rateLimited: [(offset: Int, element: ArtistRecordingRel)] = []
+            for result in results {
+                switch result {
+                case .resolved(let track):
+                    allResolved.append(track)
+                case .notFound:
+                    break
+                case .rateLimited(let item):
+                    rateLimited.append(item)
+                }
             }
 
-            if let track = try await resolveViaTextSearch(recording: recording) {
-                resolved.append(track)
-                continue
+            if !rateLimited.isEmpty {
+                // Back off: halve concurrency (minimum 1) and re-queue failed items
+                currentConcurrency = max(1, currentConcurrency / 2)
+                let backoff: UInt64 = 2_000_000_000 // 2 seconds
+                DebugLogger.log(.provider, "rate limited, reducing concurrency to \(currentConcurrency), backing off 2s")
+                try? await Task.sleep(nanoseconds: backoff)
+                pending = rateLimited + pending
+            } else if currentConcurrency < maxConcurrency {
+                // Gradually restore concurrency after successful batches
+                currentConcurrency = min(maxConcurrency, currentConcurrency + 1)
             }
-
-            DebugLogger.log(.provider, "track skip: no match for '\(recording.recordingTitle)' (\(recording.recordingMBID))")
         }
 
-        await onProgress(total, total)
-        DebugLogger.log(.provider, "track matching complete: \(resolved.count)/\(total) resolved")
-        return resolved
+        await progressCounter.finish()
+        DebugLogger.log(.provider, "track matching complete: \(allResolved.count)/\(total) resolved")
+        return allResolved
+    }
+
+    private enum ResolveResult: Sendable {
+        case resolved(ResolvedTrack)
+        case notFound
+        case rateLimited((offset: Int, element: ArtistRecordingRel))
+    }
+
+    private func resolveBatch(
+        _ items: [(offset: Int, element: ArtistRecordingRel)],
+        progressCounter: ProgressCounter
+    ) async throws -> [ResolveResult] {
+        try await withThrowingTaskGroup(of: ResolveResult.self) { group in
+            for item in items {
+                group.addTask {
+                    try Task.checkCancellation()
+                    do {
+                        let track = try await self.resolveOne(recording: item.element)
+                        await progressCounter.increment()
+                        if let track {
+                            return .resolved(track)
+                        }
+                        return .notFound
+                    } catch let spotifyError as SpotifyClientError where spotifyError == .rateLimited {
+                        return .rateLimited(item)
+                    }
+                }
+            }
+
+            var results: [ResolveResult] = []
+            for try await result in group {
+                results.append(result)
+            }
+            return results
+        }
+    }
+
+    private func resolveOne(recording: ArtistRecordingRel) async throws -> ResolvedTrack? {
+        if let track = try await resolveViaISRC(recording: recording) {
+            return track
+        }
+        return try await resolveViaTextSearch(recording: recording)
     }
 
     private func resolveViaISRC(recording: ArtistRecordingRel) async throws -> ResolvedTrack? {
@@ -97,5 +166,26 @@ actor TrackMatchingService {
         }
 
         return nil
+    }
+}
+
+/// Actor-based progress counter for concurrent track resolution.
+private actor ProgressCounter {
+    private var completed: Int = 0
+    private let total: Int
+    private let onProgress: @Sendable (Int, Int) async -> Void
+
+    init(total: Int, onProgress: @escaping @Sendable (Int, Int) async -> Void) {
+        self.total = total
+        self.onProgress = onProgress
+    }
+
+    func increment() async {
+        completed += 1
+        await onProgress(completed, total)
+    }
+
+    func finish() async {
+        await onProgress(total, total)
     }
 }
