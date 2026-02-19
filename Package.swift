@@ -13,7 +13,10 @@ let package = Package(
         .executableTarget(
             name: "SidemanApp",
             path: "Sources/SidemanApp",
-            exclude: ["Credits/README.md", "Spotify/README.md", "Playlist/README.md"]
+            exclude: ["Credits/README.md", "Spotify/README.md", "Playlist/README.md"],
+            resources: [
+                .process("Resources")
+            ]
         ),
         .testTarget(
             name: "SidemanAppTests",

@@ -52,6 +52,17 @@ mkdir -p "$APP_BUNDLE/Contents/Resources"
 # Copy executable
 cp "$BIN_PATH" "$APP_BUNDLE/Contents/MacOS/$EXECUTABLE_NAME"
 
+# Copy app icon (if present)
+if [[ -f "$PROJECT_ROOT/SupportFiles/AppIcon.icns" ]]; then
+    cp "$PROJECT_ROOT/SupportFiles/AppIcon.icns" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
+fi
+
+# Copy SwiftPM resource bundles for executable target (if present)
+BIN_DIR="$(dirname "$BIN_PATH")"
+if compgen -G "$BIN_DIR/*.bundle" > /dev/null; then
+    cp -R "$BIN_DIR"/*.bundle "$APP_BUNDLE/Contents/Resources/"
+fi
+
 # Process Info.plist — replace __VERSION__ placeholder
 sed "s/__VERSION__/$VERSION/g" "$PROJECT_ROOT/SupportFiles/Info.plist" \
     > "$APP_BUNDLE/Contents/Info.plist"
