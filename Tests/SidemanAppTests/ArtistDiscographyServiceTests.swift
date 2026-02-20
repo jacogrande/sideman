@@ -298,6 +298,8 @@ final class ArtistDiscographyServiceTests: XCTestCase {
         XCTAssertEqual(first.fetchedAt, second.fetchedAt)
         XCTAssertEqual(firstCalls.relCalls, secondCalls.relCalls)
         XCTAssertEqual(firstCalls.browseCalls, secondCalls.browseCalls)
+        XCTAssertEqual(firstCalls.workRelCalls, secondCalls.workRelCalls)
+        XCTAssertEqual(firstCalls.workRecordingCalls, secondCalls.workRecordingCalls)
     }
 
     func testFetchCoCreditDiscographyFallsBackToTitleAndArtistCreditOverlap() async throws {
@@ -390,23 +392,145 @@ final class ArtistDiscographyServiceTests: XCTestCase {
         XCTAssertEqual(result.recordings.first?.recordingMBID, "rec-a")
         XCTAssertEqual(result.recordings.first?.isrcs, ["US1234567890"])
     }
+
+    func testFetchCoCreditDiscographyIncludesWorkLevelOverlap() async throws {
+        let client = StubMBClient(
+            artistRecordingRelsByID: [
+                "artist-a": [],
+                "artist-b": [
+                    ArtistRecordingRel(
+                        recordingMBID: "rec-shared-work",
+                        recordingTitle: "Shared Work Track",
+                        relationshipType: "main",
+                        attributes: [],
+                        artistCredits: ["Artist B", "Artist A"],
+                        isrcs: ["USWORK000001"]
+                    )
+                ]
+            ],
+            browsePagesByArtist: [
+                "artist-a": [MBBrowseRecordingsPage(recordings: [], totalCount: 0, offset: 0)],
+                "artist-b": [MBBrowseRecordingsPage(recordings: [], totalCount: 0, offset: 0)]
+            ],
+            artistWorkRelsByID: [
+                "artist-a": [
+                    ArtistWorkRel(
+                        workMBID: "work-1",
+                        workTitle: "Shared Work",
+                        relationshipType: "writer",
+                        attributes: ["lyrics"]
+                    )
+                ]
+            ],
+            workRecordingsByWorkID: [
+                "work-1": [
+                    WorkRecordingRel(
+                        recordingMBID: "rec-work-artist-a",
+                        recordingTitle: "Shared Work Track",
+                        artistCredits: ["Artist B", "Artist A"],
+                        isrcs: ["USWORK000001"]
+                    )
+                ]
+            ]
+        )
+
+        let cache = DiscographyCache(fileURL: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("test-disco-\(UUID().uuidString).json"))
+        let service = ArtistDiscographyService(musicBrainzClient: client, cache: cache)
+
+        let result = try await service.fetchCoCreditDiscography(
+            artistA: CoCreditArtist(name: "Artist A", mbid: "artist-a"),
+            artistB: CoCreditArtist(name: "Artist B", mbid: "artist-b"),
+            matchMode: .anyInvolvement
+        )
+
+        XCTAssertEqual(result.recordings.count, 1)
+        XCTAssertEqual(result.recordings.first?.recordingTitle, "Shared Work Track")
+        XCTAssertEqual(
+            Set(result.recordings.first?.evidence.map(\.source) ?? []),
+            Set([.workRel, .recordingRel])
+        )
+    }
+
+    func testFetchCoCreditDiscographyCanonicalizesVariantsByISRC() async throws {
+        let client = StubMBClient(
+            artistRecordingRelsByID: [
+                "artist-a": [
+                    ArtistRecordingRel(
+                        recordingMBID: "rec-a-v1",
+                        recordingTitle: "Beautiful (Album Version)",
+                        relationshipType: "main",
+                        attributes: [],
+                        artistCredits: ["Snoop Dogg", "Pharrell Williams"],
+                        isrcs: ["US1234567890"]
+                    ),
+                    ArtistRecordingRel(
+                        recordingMBID: "rec-a-v2",
+                        recordingTitle: "Beautiful - Radio Edit",
+                        relationshipType: "main",
+                        attributes: [],
+                        artistCredits: ["Snoop Dogg", "Pharrell Williams"],
+                        isrcs: ["US1234567890"]
+                    )
+                ],
+                "artist-b": [
+                    ArtistRecordingRel(
+                        recordingMBID: "rec-b-v1",
+                        recordingTitle: "Beautiful",
+                        relationshipType: "producer",
+                        attributes: [],
+                        artistCredits: ["Snoop Dogg", "Pharrell Williams"],
+                        isrcs: ["us1234567890"]
+                    )
+                ]
+            ],
+            browsePagesByArtist: [
+                "artist-a": [MBBrowseRecordingsPage(recordings: [], totalCount: 0, offset: 0)],
+                "artist-b": [MBBrowseRecordingsPage(recordings: [], totalCount: 0, offset: 0)]
+            ]
+        )
+
+        let cache = DiscographyCache(fileURL: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("test-disco-\(UUID().uuidString).json"))
+        let service = ArtistDiscographyService(musicBrainzClient: client, cache: cache)
+
+        let result = try await service.fetchCoCreditDiscography(
+            artistA: CoCreditArtist(name: "Snoop Dogg", mbid: "artist-a"),
+            artistB: CoCreditArtist(name: "Pharrell Williams", mbid: "artist-b"),
+            matchMode: .anyInvolvement
+        )
+
+        XCTAssertEqual(result.recordings.count, 1)
+        XCTAssertEqual(result.recordings.first?.isrcs, ["US1234567890"])
+    }
 }
 
 private actor StubMBClient: MusicBrainzClient {
     let artistRecordingRelsByID: [String: [ArtistRecordingRel]]
     let browsePagesByArtist: [String: [MBBrowseRecordingsPage]]
+    let artistWorkRelsByID: [String: [ArtistWorkRel]]
+    let workRecordingsByWorkID: [String: [WorkRecordingRel]]
     private var browseCallIndexByArtist: [String: Int] = [:]
     private var relCalls: Int = 0
     private var browseCalls: Int = 0
+    private var workRelCalls: Int = 0
+    private var workRecordingCalls: Int = 0
 
     init(artistRecordingRels: [ArtistRecordingRel], browsePages: [MBBrowseRecordingsPage]) {
         self.artistRecordingRelsByID = ["*": artistRecordingRels]
         self.browsePagesByArtist = ["*": browsePages]
+        self.artistWorkRelsByID = [:]
+        self.workRecordingsByWorkID = [:]
     }
 
-    init(artistRecordingRelsByID: [String: [ArtistRecordingRel]], browsePagesByArtist: [String: [MBBrowseRecordingsPage]]) {
+    init(
+        artistRecordingRelsByID: [String: [ArtistRecordingRel]],
+        browsePagesByArtist: [String: [MBBrowseRecordingsPage]],
+        artistWorkRelsByID: [String: [ArtistWorkRel]] = [:],
+        workRecordingsByWorkID: [String: [WorkRecordingRel]] = [:]
+    ) {
         self.artistRecordingRelsByID = artistRecordingRelsByID
         self.browsePagesByArtist = browsePagesByArtist
+        self.artistWorkRelsByID = artistWorkRelsByID
+        self.workRecordingsByWorkID = workRecordingsByWorkID
     }
 
     func searchRecordings(query: RecordingQuery) async throws -> [RecordingCandidate] { [] }
@@ -423,6 +547,14 @@ private actor StubMBClient: MusicBrainzClient {
         relCalls += 1
         return artistRecordingRelsByID[id] ?? artistRecordingRelsByID["*"] ?? []
     }
+    func getArtistWorkRels(id: String) async throws -> [ArtistWorkRel] {
+        workRelCalls += 1
+        return artistWorkRelsByID[id] ?? artistWorkRelsByID["*"] ?? []
+    }
+    func getWorkRecordings(id: String) async throws -> [WorkRecordingRel] {
+        workRecordingCalls += 1
+        return workRecordingsByWorkID[id] ?? workRecordingsByWorkID["*"] ?? []
+    }
     func browseRecordings(artistID: String, offset: Int, limit: Int, includeISRCs: Bool) async throws -> MBBrowseRecordingsPage {
         browseCalls += 1
         let key = browsePagesByArtist[artistID] != nil ? artistID : "*"
@@ -438,7 +570,7 @@ private actor StubMBClient: MusicBrainzClient {
     func getRecordingISRCs(id: String) async throws -> [String] { [] }
     func searchArtists(name: String) async throws -> [MBArtistSearchResult] { [] }
 
-    func callCounts() -> (relCalls: Int, browseCalls: Int) {
-        (relCalls, browseCalls)
+    func callCounts() -> (relCalls: Int, browseCalls: Int, workRelCalls: Int, workRecordingCalls: Int) {
+        (relCalls, browseCalls, workRelCalls, workRecordingCalls)
     }
 }

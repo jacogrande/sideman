@@ -365,6 +365,110 @@ struct ArtistRecordingRel: Equatable, Codable {
     let attributes: [String]
     let artistCredits: [String]
     let isrcs: [String]
+
+    /// Optional metadata describing how this recording was discovered for a
+    /// given artist (recording rel, browse main credit, or work-level link).
+    let evidence: [RecordingInvolvementEvidence]
+
+    /// Normalized identifier used to collapse remix/remaster/version variants.
+    let canonicalKey: String?
+
+    init(
+        recordingMBID: String,
+        recordingTitle: String,
+        relationshipType: String,
+        attributes: [String],
+        artistCredits: [String],
+        isrcs: [String],
+        evidence: [RecordingInvolvementEvidence] = [],
+        canonicalKey: String? = nil
+    ) {
+        self.recordingMBID = recordingMBID
+        self.recordingTitle = recordingTitle
+        self.relationshipType = relationshipType
+        self.attributes = attributes
+        self.artistCredits = artistCredits
+        self.isrcs = isrcs
+        self.evidence = evidence
+        self.canonicalKey = canonicalKey
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case recordingMBID
+        case recordingTitle
+        case relationshipType
+        case attributes
+        case artistCredits
+        case isrcs
+        case evidence
+        case canonicalKey
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        recordingMBID = try container.decode(String.self, forKey: .recordingMBID)
+        recordingTitle = try container.decode(String.self, forKey: .recordingTitle)
+        relationshipType = try container.decode(String.self, forKey: .relationshipType)
+        attributes = try container.decodeIfPresent([String].self, forKey: .attributes) ?? []
+        artistCredits = try container.decodeIfPresent([String].self, forKey: .artistCredits) ?? []
+        isrcs = try container.decodeIfPresent([String].self, forKey: .isrcs) ?? []
+        evidence = try container.decodeIfPresent([RecordingInvolvementEvidence].self, forKey: .evidence) ?? []
+        canonicalKey = try container.decodeIfPresent(String.self, forKey: .canonicalKey)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(recordingMBID, forKey: .recordingMBID)
+        try container.encode(recordingTitle, forKey: .recordingTitle)
+        try container.encode(relationshipType, forKey: .relationshipType)
+        try container.encode(attributes, forKey: .attributes)
+        try container.encode(artistCredits, forKey: .artistCredits)
+        try container.encode(isrcs, forKey: .isrcs)
+        try container.encode(evidence, forKey: .evidence)
+        try container.encodeIfPresent(canonicalKey, forKey: .canonicalKey)
+    }
+}
+
+enum InvolvementSource: String, Equatable, Codable, CaseIterable {
+    case recordingRel
+    case browseMain
+    case workRel
+}
+
+struct RecordingInvolvementEvidence: Equatable, Codable {
+    let artistMBID: String
+    let source: InvolvementSource
+    let relationshipType: String
+    let attributes: [String]
+    let confidence: Double
+
+    init(
+        artistMBID: String,
+        source: InvolvementSource,
+        relationshipType: String,
+        attributes: [String],
+        confidence: Double
+    ) {
+        self.artistMBID = artistMBID
+        self.source = source
+        self.relationshipType = relationshipType
+        self.attributes = attributes
+        self.confidence = confidence
+    }
+}
+
+struct ArtistWorkRel: Equatable, Codable {
+    let workMBID: String
+    let workTitle: String
+    let relationshipType: String
+    let attributes: [String]
+}
+
+struct WorkRecordingRel: Equatable, Codable {
+    let recordingMBID: String
+    let recordingTitle: String
+    let artistCredits: [String]
+    let isrcs: [String]
 }
 
 struct DiscographyResult: Equatable, Codable {

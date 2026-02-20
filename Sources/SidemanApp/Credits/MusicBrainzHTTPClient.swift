@@ -137,6 +137,54 @@ actor MusicBrainzHTTPClient: MusicBrainzClient {
         }
     }
 
+    func getArtistWorkRels(id: String) async throws -> [ArtistWorkRel] {
+        DebugLogger.log(.network, "getArtistWorkRels id=\(id)")
+        let endpoint = Endpoint(
+            path: "artist/\(id)",
+            queryItems: [
+                URLQueryItem(name: "inc", value: "work-rels"),
+                URLQueryItem(name: "fmt", value: "json")
+            ]
+        )
+
+        let payload: ArtistWorkRelsDTO = try await request(endpoint: endpoint)
+        DebugLogger.log(.network, "getArtistWorkRels returned \(payload.relations.count) relations")
+
+        return payload.relations.compactMap { rel in
+            guard let work = rel.work else { return nil }
+            return ArtistWorkRel(
+                workMBID: work.id,
+                workTitle: work.title,
+                relationshipType: rel.type,
+                attributes: rel.attributes
+            )
+        }
+    }
+
+    func getWorkRecordings(id: String) async throws -> [WorkRecordingRel] {
+        DebugLogger.log(.network, "getWorkRecordings id=\(id)")
+        let endpoint = Endpoint(
+            path: "work/\(id)",
+            queryItems: [
+                URLQueryItem(name: "inc", value: "recording-rels"),
+                URLQueryItem(name: "fmt", value: "json")
+            ]
+        )
+
+        let payload: WorkRecordingRelsDTO = try await request(endpoint: endpoint)
+        DebugLogger.log(.network, "getWorkRecordings returned \(payload.relations.count) relations")
+
+        return payload.relations.compactMap { rel in
+            guard let recording = rel.recording else { return nil }
+            return WorkRecordingRel(
+                recordingMBID: recording.id,
+                recordingTitle: recording.title,
+                artistCredits: recording.artistCredit.map(\.name),
+                isrcs: recording.isrcs
+            )
+        }
+    }
+
     func browseRecordings(artistID: String, offset: Int, limit: Int, includeISRCs: Bool) async throws -> MBBrowseRecordingsPage {
         DebugLogger.log(.network, "browseRecordings artistID=\(artistID) offset=\(offset) limit=\(limit)")
         var incParts = ["artist-credits"]
@@ -468,6 +516,17 @@ private struct ArtistDTO: Decodable {
 private struct WorkReferenceDTO: Decodable {
     let id: String
     let title: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case title
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        title = try container.decodeIfPresent(String.self, forKey: .title) ?? ""
+    }
 }
 
 // MARK: - Artist Recording Rels DTOs
@@ -508,11 +567,13 @@ private struct RecordingRefDTO: Decodable {
     let id: String
     let title: String
     let artistCredit: [ArtistCreditDTO]
+    let isrcs: [String]
 
     enum CodingKeys: String, CodingKey {
         case id
         case title
         case artistCredit = "artist-credit"
+        case isrcs
     }
 
     init(from decoder: Decoder) throws {
@@ -520,6 +581,72 @@ private struct RecordingRefDTO: Decodable {
         id = try container.decode(String.self, forKey: .id)
         title = try container.decode(String.self, forKey: .title)
         artistCredit = try container.decodeIfPresent([ArtistCreditDTO].self, forKey: .artistCredit) ?? []
+        isrcs = try container.decodeIfPresent([String].self, forKey: .isrcs) ?? []
+    }
+}
+
+// MARK: - Artist Work Rels DTOs
+
+private struct ArtistWorkRelsDTO: Decodable {
+    let relations: [ArtistWorkRelationDTO]
+
+    enum CodingKeys: String, CodingKey {
+        case relations
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        relations = try container.decodeIfPresent([ArtistWorkRelationDTO].self, forKey: .relations) ?? []
+    }
+}
+
+private struct ArtistWorkRelationDTO: Decodable {
+    let type: String
+    let attributes: [String]
+    let work: WorkReferenceDTO?
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case attributes
+        case work
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        type = try container.decodeIfPresent(String.self, forKey: .type) ?? "unknown"
+        attributes = try container.decodeIfPresent([String].self, forKey: .attributes) ?? []
+        work = try container.decodeIfPresent(WorkReferenceDTO.self, forKey: .work)
+    }
+}
+
+// MARK: - Work Recording Rels DTOs
+
+private struct WorkRecordingRelsDTO: Decodable {
+    let relations: [WorkRecordingRelationDTO]
+
+    enum CodingKeys: String, CodingKey {
+        case relations
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        relations = try container.decodeIfPresent([WorkRecordingRelationDTO].self, forKey: .relations) ?? []
+    }
+}
+
+private struct WorkRecordingRelationDTO: Decodable {
+    let type: String
+    let recording: RecordingRefDTO?
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case recording
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        type = try container.decodeIfPresent(String.self, forKey: .type) ?? "unknown"
+        recording = try container.decodeIfPresent(RecordingRefDTO.self, forKey: .recording)
     }
 }
 

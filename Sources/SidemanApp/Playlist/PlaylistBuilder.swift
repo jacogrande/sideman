@@ -65,8 +65,9 @@ actor PlaylistBuilder {
         await onStageChange(.rankingByPopularity(total: discography.recordings.count))
         try Task.checkCancellation()
 
-        // Over-fetch by 1.5x to account for duplicates after dedup
-        let fetchCount = min(Int(Double(request.maxTracks) * 1.5), discography.recordings.count)
+        // Over-fetch by 2x to account for join canonicalization, deduplication,
+        // and fuzzy matching attrition before final truncation.
+        let fetchCount = min(Int(Double(request.maxTracks) * 2.0), discography.recordings.count)
         let rankedRecordings = await rankByPopularity(
             recordings: discography.recordings,
             artistMBID: request.mode == .singleArtist ? request.artistMBID : nil,

@@ -161,6 +161,8 @@ private actor StubClient: MusicBrainzClient {
     }
 
     func getArtistRecordingRels(id: String) async throws -> [ArtistRecordingRel] { [] }
+    func getArtistWorkRels(id: String) async throws -> [ArtistWorkRel] { [] }
+    func getWorkRecordings(id: String) async throws -> [WorkRecordingRel] { [] }
     func browseRecordings(artistID: String, offset: Int, limit: Int, includeISRCs: Bool) async throws -> MBBrowseRecordingsPage {
         MBBrowseRecordingsPage(recordings: [], totalCount: 0, offset: 0)
     }

@@ -6,6 +6,8 @@ protocol MusicBrainzClient {
     func getWork(id: String) async throws -> MBWorkDetail
     func getRelease(id: String) async throws -> MBReleaseDetail
     func getArtistRecordingRels(id: String) async throws -> [ArtistRecordingRel]
+    func getArtistWorkRels(id: String) async throws -> [ArtistWorkRel]
+    func getWorkRecordings(id: String) async throws -> [WorkRecordingRel]
     func browseRecordings(artistID: String, offset: Int, limit: Int, includeISRCs: Bool) async throws -> MBBrowseRecordingsPage
     func getRecordingISRCs(id: String) async throws -> [String]
     func searchArtists(name: String) async throws -> [MBArtistSearchResult]
