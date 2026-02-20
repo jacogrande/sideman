@@ -13,6 +13,8 @@ final class PlaylistBuilderTests: XCTestCase {
         XCTAssertNil(request.roleFilter)
         XCTAssertFalse(request.isPublic)
         XCTAssertEqual(request.maxTracks, 100)
+        XCTAssertEqual(request.mode, .singleArtist)
+        XCTAssertNil(request.coCredit)
     }
 
     func testPlaylistBuildRequestCustomValues() {
@@ -27,6 +29,26 @@ final class PlaylistBuilderTests: XCTestCase {
         XCTAssertEqual(request.roleFilter, .musicians)
         XCTAssertTrue(request.isPublic)
         XCTAssertEqual(request.maxTracks, 25)
+        XCTAssertEqual(request.mode, .singleArtist)
+    }
+
+    func testPlaylistBuildRequestCoCreditInitializer() {
+        let request = PlaylistBuildRequest(
+            coCredit: CoCreditConfig(
+                artistA: CoCreditArtist(name: "Snoop Dogg", mbid: "a"),
+                artistB: CoCreditArtist(name: "Pharrell", mbid: "b"),
+                matchMode: .anyInvolvement
+            ),
+            isPublic: true,
+            maxTracks: 75
+        )
+
+        XCTAssertEqual(request.mode, .coCredit)
+        XCTAssertEqual(request.coCredit?.artistA.name, "Snoop Dogg")
+        XCTAssertEqual(request.coCredit?.artistB.name, "Pharrell")
+        XCTAssertNil(request.roleFilter)
+        XCTAssertTrue(request.isPublic)
+        XCTAssertEqual(request.maxTracks, 75)
     }
 
     func testPlaylistBuildResultEquatable() {
@@ -67,7 +89,14 @@ final class PlaylistBuilderTests: XCTestCase {
     }
 
     func testPlaylistFlowPhaseEquatable() {
-        let context = PersonContext(personName: "Test", personMBID: "abc", roles: ["bass"], roleGroup: .musicians)
+        let context = PersonContext(
+            personName: "Test",
+            personMBID: "abc",
+            roles: ["bass"],
+            roleGroup: .musicians,
+            primaryArtistName: "Primary",
+            primaryArtistMBID: "primary-1"
+        )
         XCTAssertEqual(PlaylistFlowPhase.idle, PlaylistFlowPhase.idle)
         XCTAssertEqual(PlaylistFlowPhase.confirming(context), PlaylistFlowPhase.confirming(context))
         XCTAssertNotEqual(PlaylistFlowPhase.idle, PlaylistFlowPhase.authenticating)
@@ -115,7 +144,12 @@ final class PlaylistBuilderTests: XCTestCase {
 
     func testPlaylistBuilderErrorEquatable() {
         XCTAssertEqual(PlaylistBuilderError.noRecordingsFound, PlaylistBuilderError.noRecordingsFound)
+        XCTAssertEqual(PlaylistBuilderError.noIntersectionFound, PlaylistBuilderError.noIntersectionFound)
         XCTAssertEqual(PlaylistBuilderError.noTracksResolved, PlaylistBuilderError.noTracksResolved)
+        XCTAssertEqual(
+            PlaylistBuilderError.artistResolutionFailed("x"),
+            PlaylistBuilderError.artistResolutionFailed("x")
+        )
         XCTAssertNotEqual(PlaylistBuilderError.noRecordingsFound, PlaylistBuilderError.noTracksResolved)
     }
 

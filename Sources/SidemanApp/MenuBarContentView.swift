@@ -369,7 +369,8 @@ struct MenuBarContentView: View {
                                             personName: tappedRow.personName,
                                             personMBID: tappedRow.personMBID,
                                             roles: tappedRow.roles,
-                                            roleGroup: group
+                                            roleGroup: group,
+                                            primaryArtistName: primaryArtistNameForPlaylist()
                                         )
                                     }
                                 }
@@ -417,6 +418,17 @@ struct MenuBarContentView: View {
         }
 
         return entry.personName.lowercased()
+    }
+
+    private func primaryArtistNameForPlaylist() -> String? {
+        guard let rawArtist = viewModel.snapshot.track?.artist else {
+            return nil
+        }
+        let trimmed = rawArtist.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
     }
 
     @ViewBuilder

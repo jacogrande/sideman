@@ -10,14 +10,63 @@ actor ArtistDiscographyService {
     }
 
     func fetchDiscography(artistMBID: String, artistName: String, roleFilter: CreditRoleGroup?) async throws -> DiscographyResult {
+        let all = try await fetchAllDiscography(artistMBID: artistMBID, artistName: artistName)
+        let filtered = applyRoleFilter(all.recordings, roleFilter: roleFilter)
+
+        return DiscographyResult(
+            artistMBID: all.artistMBID,
+            artistName: all.artistName,
+            recordings: filtered,
+            fetchedAt: all.fetchedAt
+        )
+    }
+
+    func fetchCoCreditDiscography(
+        artistA: CoCreditArtist,
+        artistB: CoCreditArtist,
+        matchMode: CoCreditMatchMode
+    ) async throws -> DiscographyResult {
+        let pairKey = coCreditCacheKey(artistAID: artistA.mbid, artistBID: artistB.mbid, matchMode: matchMode)
+        if let cached = await cache.get(for: pairKey) {
+            return cached
+        }
+
+        let discographyA = try await fetchAllDiscography(artistMBID: artistA.mbid, artistName: artistA.name)
+        let discographyB = try await fetchAllDiscography(artistMBID: artistB.mbid, artistName: artistB.name)
+
+        let intersected: [ArtistRecordingRel]
+        switch matchMode {
+        case .anyInvolvement:
+            intersected = intersectRecordings(lhs: discographyA.recordings, rhs: discographyB.recordings)
+        }
+
+        guard !intersected.isEmpty else {
+            throw PlaylistBuilderError.noIntersectionFound
+        }
+
+        let result = DiscographyResult(
+            artistMBID: pairKey,
+            artistName: "\(artistA.name) × \(artistB.name)",
+            recordings: intersected,
+            fetchedAt: Date()
+        )
+
+        await cache.set(result, for: pairKey)
+        return result
+    }
+
+    private func applyRoleFilter(_ recordings: [ArtistRecordingRel], roleFilter: CreditRoleGroup?) -> [ArtistRecordingRel] {
+        guard let filter = roleFilter else { return recordings }
+
+        return recordings.filter { rec in
+            let roleText = ([rec.relationshipType] + rec.attributes).joined(separator: " ")
+            return CreditsMapper.roleGroup(forRoleText: roleText) == filter
+        }
+    }
+
+    private func fetchAllDiscography(artistMBID: String, artistName: String) async throws -> DiscographyResult {
         if let cached = await cache.get(for: artistMBID) {
-            let filtered = applyRoleFilter(cached.recordings, roleFilter: roleFilter)
-            return DiscographyResult(
-                artistMBID: cached.artistMBID,
-                artistName: cached.artistName,
-                recordings: filtered,
-                fetchedAt: cached.fetchedAt
-            )
+            return cached
         }
 
         DebugLogger.log(.provider, "fetching discography for \(artistName) (\(artistMBID))")
@@ -86,22 +135,76 @@ actor ArtistDiscographyService {
         )
 
         await cache.set(result, for: artistMBID)
-
-        let filtered = applyRoleFilter(allRecordings, roleFilter: roleFilter)
-        return DiscographyResult(
-            artistMBID: artistMBID,
-            artistName: artistName,
-            recordings: filtered,
-            fetchedAt: result.fetchedAt
-        )
+        return result
     }
 
-    private func applyRoleFilter(_ recordings: [ArtistRecordingRel], roleFilter: CreditRoleGroup?) -> [ArtistRecordingRel] {
-        guard let filter = roleFilter else { return recordings }
+    private func coCreditCacheKey(artistAID: String, artistBID: String, matchMode: CoCreditMatchMode) -> String {
+        let sorted = [artistAID, artistBID].sorted()
+        return "co-credit:\(sorted[0])|\(sorted[1])|\(matchMode.rawValue)"
+    }
 
-        return recordings.filter { rec in
-            let roleText = ([rec.relationshipType] + rec.attributes).joined(separator: " ")
-            return CreditsMapper.roleGroup(forRoleText: roleText) == filter
+    private func intersectRecordings(lhs: [ArtistRecordingRel], rhs: [ArtistRecordingRel]) -> [ArtistRecordingRel] {
+        let lhsByMBID = Dictionary(grouping: lhs, by: \.recordingMBID)
+        let rhsByMBID = Dictionary(grouping: rhs, by: \.recordingMBID)
+        let sharedIDs = Set(lhsByMBID.keys).intersection(rhsByMBID.keys)
+
+        return sharedIDs.compactMap { recordingID in
+            guard
+                let lhsBest = lhsByMBID[recordingID].flatMap(preferredRecording(from:)),
+                let rhsBest = rhsByMBID[recordingID].flatMap(preferredRecording(from:))
+            else {
+                return nil
+            }
+
+            let preferred = choosePreferred(lhs: lhsBest, rhs: rhsBest)
+            return ArtistRecordingRel(
+                recordingMBID: preferred.recordingMBID,
+                recordingTitle: preferred.recordingTitle,
+                relationshipType: preferred.relationshipType,
+                attributes: mergedUnique(lhsBest.attributes, rhsBest.attributes),
+                artistCredits: mergedUnique(lhsBest.artistCredits, rhsBest.artistCredits),
+                isrcs: mergedUnique(lhsBest.isrcs, rhsBest.isrcs)
+            )
         }
+        .sorted { lhs, rhs in
+            lhs.recordingTitle.localizedCaseInsensitiveCompare(rhs.recordingTitle) == .orderedAscending
+        }
+    }
+
+    private func preferredRecording(from candidates: [ArtistRecordingRel]) -> ArtistRecordingRel? {
+        candidates.max { lhs, rhs in
+            let lhsScore = score(lhs)
+            let rhsScore = score(rhs)
+            if lhsScore == rhsScore {
+                return lhs.recordingTitle.localizedCaseInsensitiveCompare(rhs.recordingTitle) == .orderedDescending
+            }
+            return lhsScore < rhsScore
+        }
+    }
+
+    private func choosePreferred(lhs: ArtistRecordingRel, rhs: ArtistRecordingRel) -> ArtistRecordingRel {
+        score(lhs) >= score(rhs) ? lhs : rhs
+    }
+
+    private func score(_ recording: ArtistRecordingRel) -> Int {
+        var total = recording.isrcs.count * 3
+        if recording.relationshipType == "main" {
+            total += 1
+        }
+        total += recording.artistCredits.count
+        return total
+    }
+
+    private func mergedUnique(_ lhs: [String], _ rhs: [String]) -> [String] {
+        var ordered: [String] = []
+        var seen = Set<String>()
+
+        for value in lhs + rhs {
+            let key = value.lowercased()
+            if seen.insert(key).inserted {
+                ordered.append(value)
+            }
+        }
+        return ordered
     }
 }

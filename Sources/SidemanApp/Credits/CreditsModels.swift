@@ -444,19 +444,77 @@ struct SpotifyTokens: Codable, Equatable {
 
 // MARK: - Playlist Building
 
+enum PlaylistMode: String, Equatable, Codable, CaseIterable {
+    case singleArtist
+    case coCredit
+
+    var title: String {
+        switch self {
+        case .singleArtist:
+            return "Single Artist"
+        case .coCredit:
+            return "Co-Credit (AND)"
+        }
+    }
+}
+
+enum CoCreditMatchMode: String, Equatable, Codable {
+    case anyInvolvement
+
+    var title: String {
+        switch self {
+        case .anyInvolvement:
+            return "Any involvement"
+        }
+    }
+}
+
+struct CoCreditArtist: Equatable, Codable {
+    let name: String
+    let mbid: String
+}
+
+struct CoCreditConfig: Equatable, Codable {
+    let artistA: CoCreditArtist
+    let artistB: CoCreditArtist
+    let matchMode: CoCreditMatchMode
+}
+
 struct PlaylistBuildRequest {
     let artistMBID: String
     let artistName: String
     let roleFilter: CreditRoleGroup?
     let isPublic: Bool
     let maxTracks: Int
+    let mode: PlaylistMode
+    let coCredit: CoCreditConfig?
 
-    init(artistMBID: String, artistName: String, roleFilter: CreditRoleGroup? = nil, isPublic: Bool = false, maxTracks: Int = 100) {
+    init(
+        artistMBID: String,
+        artistName: String,
+        roleFilter: CreditRoleGroup? = nil,
+        isPublic: Bool = false,
+        maxTracks: Int = 100,
+        mode: PlaylistMode = .singleArtist,
+        coCredit: CoCreditConfig? = nil
+    ) {
         self.artistMBID = artistMBID
         self.artistName = artistName
         self.roleFilter = roleFilter
         self.isPublic = isPublic
         self.maxTracks = maxTracks
+        self.mode = mode
+        self.coCredit = coCredit
+    }
+
+    init(coCredit: CoCreditConfig, isPublic: Bool = false, maxTracks: Int = 100) {
+        self.artistMBID = coCredit.artistA.mbid
+        self.artistName = coCredit.artistA.name
+        self.roleFilter = nil
+        self.isPublic = isPublic
+        self.maxTracks = maxTracks
+        self.mode = .coCredit
+        self.coCredit = coCredit
     }
 }
 
@@ -484,5 +542,7 @@ enum SpotifyClientError: Error, Equatable {
 
 enum PlaylistBuilderError: Error, Equatable {
     case noRecordingsFound
+    case noIntersectionFound
     case noTracksResolved
+    case artistResolutionFailed(String)
 }

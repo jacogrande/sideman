@@ -8,6 +8,8 @@ struct PersonContext: Equatable {
     var personMBID: String?
     let roles: [String]
     let roleGroup: CreditRoleGroup?
+    let primaryArtistName: String?
+    var primaryArtistMBID: String?
 }
 
 enum PlaylistFlowPhase: Equatable {
@@ -24,15 +26,21 @@ enum PlaylistFlowPhase: Equatable {
 final class PlaylistViewModel: ObservableObject {
     private static let artistSearchMinScore = 80
     @Published fileprivate(set) var phase: PlaylistFlowPhase = .idle
+    @Published var selectedPlaylistMode: PlaylistMode = .singleArtist
     @Published var selectedRoleFilter: CreditRoleGroup?
     @Published var isPublic: Bool = false
     @Published var targetTrackCount: Double = 50
+    @Published var coCreditArtistAName: String = ""
+    @Published var coCreditArtistAMBID: String?
+    @Published var coCreditArtistBName: String = ""
+    @Published var coCreditArtistBMBID: String?
 
     private var buildTask: Task<Void, Never>?
     private var playlistBuilder: PlaylistBuilder?
     private var spotifyAuthState: SpotifyAuthState?
     private var musicBrainzClient: MusicBrainzClient?
     private var lastResult: PlaylistBuildResult?
+    private let coCreditMatchMode: CoCreditMatchMode = .anyInvolvement
 
     func configure(builder: PlaylistBuilder, authState: SpotifyAuthState, musicBrainzClient: MusicBrainzClient) {
         self.playlistBuilder = builder
@@ -40,14 +48,29 @@ final class PlaylistViewModel: ObservableObject {
         self.musicBrainzClient = musicBrainzClient
     }
 
-    func beginFlow(personName: String, personMBID: String? = nil, roles: [String], roleGroup: CreditRoleGroup?) {
+    func beginFlow(
+        personName: String,
+        personMBID: String? = nil,
+        roles: [String],
+        roleGroup: CreditRoleGroup?,
+        primaryArtistName: String? = nil,
+        primaryArtistMBID: String? = nil
+    ) {
+        let normalizedPrimaryArtist = normalizeArtistName(primaryArtistName)
         let context = PersonContext(
             personName: personName,
             personMBID: personMBID,
             roles: roles,
-            roleGroup: roleGroup
+            roleGroup: roleGroup,
+            primaryArtistName: normalizedPrimaryArtist.isEmpty ? nil : normalizedPrimaryArtist,
+            primaryArtistMBID: primaryArtistMBID
         )
+        selectedPlaylistMode = .singleArtist
         selectedRoleFilter = roleGroup
+        coCreditArtistAName = normalizedPrimaryArtist
+        coCreditArtistAMBID = primaryArtistMBID
+        coCreditArtistBName = personName
+        coCreditArtistBMBID = personMBID
         phase = .confirming(context)
         DebugLogger.log(.ui, "playlist flow started for \(personName)")
     }
@@ -63,33 +86,92 @@ final class PlaylistViewModel: ObservableObject {
         buildTask = Task { [weak self] in
             guard let self else { return }
 
-            // Resolve MBID if not already known
-            if context.personMBID == nil {
-                self.phase = .resolvingArtist
-                guard let mbClient = self.musicBrainzClient else {
-                    self.phase = .failed("MusicBrainz client not configured")
-                    return
-                }
-
-                do {
-                    let results = try await mbClient.searchArtists(name: context.personName)
-                    guard let best = results.first, best.score >= Self.artistSearchMinScore else {
-                        self.phase = .failed("Could not find \"\(context.personName)\" on MusicBrainz.")
-                        DebugLogger.log(.ui, "artist search no match for '\(context.personName)'")
-                        self.buildTask = nil
-                        return
-                    }
-                    context.personMBID = best.id
-                    DebugLogger.log(.ui, "artist search resolved '\(context.personName)' → \(best.id) (score=\(best.score))")
-                } catch {
-                    self.phase = .failed("MusicBrainz search failed: \(error.localizedDescription)")
-                    self.buildTask = nil
-                    return
-                }
+            guard let mbClient = self.musicBrainzClient else {
+                self.phase = .failed("MusicBrainz client not configured")
+                self.buildTask = nil
+                return
             }
 
-            guard let artistMBID = context.personMBID else {
-                self.phase = .failed("No MusicBrainz ID found.")
+            let target = Int(self.targetTrackCount)
+            let request: PlaylistBuildRequest
+
+            do {
+                switch self.selectedPlaylistMode {
+                case .singleArtist:
+                    // Resolve MBID if not already known
+                    if context.personMBID == nil {
+                        self.phase = .resolvingArtist
+                        let resolved = try await self.resolveArtist(
+                            name: context.personName,
+                            existingMBID: nil,
+                            client: mbClient
+                        )
+                        context.personMBID = resolved.mbid
+                        self.coCreditArtistBMBID = resolved.mbid
+                        DebugLogger.log(.ui, "artist search resolved '\(context.personName)' → \(resolved.mbid)")
+                    }
+
+                    guard let artistMBID = context.personMBID else {
+                        throw PlaylistBuilderError.artistResolutionFailed("No MusicBrainz ID found.")
+                    }
+
+                    request = PlaylistBuildRequest(
+                        artistMBID: artistMBID,
+                        artistName: context.personName,
+                        roleFilter: self.selectedRoleFilter,
+                        isPublic: self.isPublic,
+                        maxTracks: target
+                    )
+
+                case .coCredit:
+                    let artistAName = normalizeArtistName(self.coCreditArtistAName)
+                    let artistBName = normalizeArtistName(self.coCreditArtistBName)
+
+                    guard !artistAName.isEmpty, !artistBName.isEmpty else {
+                        throw PlaylistBuilderError.artistResolutionFailed("Enter two artist names for co-credit mode.")
+                    }
+
+                    self.phase = .resolvingArtist
+
+                    let resolvedArtistA = try await self.resolveArtist(
+                        name: artistAName,
+                        existingMBID: self.coCreditArtistAMBID,
+                        client: mbClient
+                    )
+                    let resolvedArtistB = try await self.resolveArtist(
+                        name: artistBName,
+                        existingMBID: self.coCreditArtistBMBID,
+                        client: mbClient
+                    )
+
+                    if resolvedArtistA.mbid == resolvedArtistB.mbid ||
+                        resolvedArtistA.name.localizedCaseInsensitiveCompare(resolvedArtistB.name) == .orderedSame {
+                        throw PlaylistBuilderError.artistResolutionFailed("Pick two different artists for co-credit mode.")
+                    }
+
+                    self.coCreditArtistAName = resolvedArtistA.name
+                    self.coCreditArtistAMBID = resolvedArtistA.mbid
+                    self.coCreditArtistBName = resolvedArtistB.name
+                    self.coCreditArtistBMBID = resolvedArtistB.mbid
+
+                    let coCredit = CoCreditConfig(
+                        artistA: CoCreditArtist(name: resolvedArtistA.name, mbid: resolvedArtistA.mbid),
+                        artistB: CoCreditArtist(name: resolvedArtistB.name, mbid: resolvedArtistB.mbid),
+                        matchMode: self.coCreditMatchMode
+                    )
+
+                    request = PlaylistBuildRequest(
+                        coCredit: coCredit,
+                        isPublic: self.isPublic,
+                        maxTracks: target
+                    )
+                }
+            } catch let error as PlaylistBuilderError {
+                self.phase = .failed(self.playlistErrorMessage(error))
+                self.buildTask = nil
+                return
+            } catch {
+                self.phase = .failed(error.localizedDescription)
                 self.buildTask = nil
                 return
             }
@@ -110,15 +192,6 @@ final class PlaylistViewModel: ObservableObject {
                     return
                 }
             }
-
-            let target = Int(self.targetTrackCount)
-            let request = PlaylistBuildRequest(
-                artistMBID: artistMBID,
-                artistName: context.personName,
-                roleFilter: self.selectedRoleFilter,
-                isPublic: self.isPublic,
-                maxTracks: target
-            )
 
             do {
                 let phaseUpdater = MainActorPhaseUpdater(viewModel: self)
@@ -167,9 +240,40 @@ final class PlaylistViewModel: ObservableObject {
         switch error {
         case .noRecordingsFound:
             return "No recordings found for this person in MusicBrainz."
+        case .noIntersectionFound:
+            return "No shared recordings found where both artists are credited."
         case .noTracksResolved:
             return "Could not find any matching tracks on Spotify."
+        case .artistResolutionFailed(let message):
+            return message
         }
+    }
+
+    private func resolveArtist(name: String, existingMBID: String?, client: MusicBrainzClient) async throws -> CoCreditArtist {
+        let trimmedName = normalizeArtistName(name)
+        guard !trimmedName.isEmpty else {
+            throw PlaylistBuilderError.artistResolutionFailed("Artist name cannot be empty.")
+        }
+
+        if let existingMBID, !existingMBID.isEmpty {
+            return CoCreditArtist(name: trimmedName, mbid: existingMBID)
+        }
+
+        do {
+            let results = try await client.searchArtists(name: trimmedName)
+            guard let best = results.first, best.score >= Self.artistSearchMinScore else {
+                throw PlaylistBuilderError.artistResolutionFailed("Could not find \"\(trimmedName)\" on MusicBrainz.")
+            }
+            return CoCreditArtist(name: best.name, mbid: best.id)
+        } catch let error as PlaylistBuilderError {
+            throw error
+        } catch {
+            throw PlaylistBuilderError.artistResolutionFailed("MusicBrainz search failed for \"\(trimmedName)\": \(error.localizedDescription)")
+        }
+    }
+
+    private func normalizeArtistName(_ name: String?) -> String {
+        (name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 

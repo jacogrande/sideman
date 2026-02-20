@@ -42,31 +42,59 @@ private struct PlaylistConfirmationView: View {
                 Spacer()
             }
 
-            Text("Create a playlist featuring **\(context.personName)**?")
-                .font(.system(size: 12, weight: .regular, design: .rounded))
-
             VStack(alignment: .leading, spacing: 6) {
-                Text("Role filter")
+                Text("Playlist mode")
                     .font(.system(size: 10, weight: .semibold, design: .rounded))
                     .foregroundStyle(.secondary)
 
                 HStack(spacing: 6) {
-                    RoleFilterCapsule(
-                        label: "All roles",
-                        isSelected: viewModel.selectedRoleFilter == nil
+                    PlaylistModeCapsule(
+                        label: PlaylistMode.singleArtist.title,
+                        isSelected: viewModel.selectedPlaylistMode == .singleArtist
                     ) {
-                        viewModel.selectedRoleFilter = nil
+                        viewModel.selectedPlaylistMode = .singleArtist
                     }
 
-                    if let group = context.roleGroup {
+                    PlaylistModeCapsule(
+                        label: PlaylistMode.coCredit.title,
+                        isSelected: viewModel.selectedPlaylistMode == .coCredit
+                    ) {
+                        viewModel.selectedPlaylistMode = .coCredit
+                    }
+                }
+            }
+
+            if viewModel.selectedPlaylistMode == .singleArtist {
+                Text("Create a playlist featuring **\(context.personName)**?")
+                    .font(.system(size: 12, weight: .regular, design: .rounded))
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Role filter")
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.secondary)
+
+                    HStack(spacing: 6) {
                         RoleFilterCapsule(
-                            label: group.filterLabel,
-                            isSelected: viewModel.selectedRoleFilter == group
+                            label: "All roles",
+                            isSelected: viewModel.selectedRoleFilter == nil
                         ) {
-                            viewModel.selectedRoleFilter = group
+                            viewModel.selectedRoleFilter = nil
+                        }
+
+                        if let group = context.roleGroup {
+                            RoleFilterCapsule(
+                                label: group.filterLabel,
+                                isSelected: viewModel.selectedRoleFilter == group
+                            ) {
+                                viewModel.selectedRoleFilter = group
+                            }
                         }
                     }
                 }
+            } else {
+                Text("Create a playlist where **both artists** are credited on the same tracks.")
+                    .font(.system(size: 12, weight: .regular, design: .rounded))
+                coCreditArtistInputs
             }
 
             VStack(alignment: .leading, spacing: 6) {
@@ -123,6 +151,47 @@ private struct PlaylistConfirmationView: View {
             }
         }
     }
+
+    @ViewBuilder
+    private var coCreditArtistInputs: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Artist A")
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
+                TextField(
+                    context.primaryArtistName ?? "Primary artist",
+                    text: Binding(
+                        get: { viewModel.coCreditArtistAName },
+                        set: { newValue in
+                            viewModel.coCreditArtistAName = newValue
+                            viewModel.coCreditArtistAMBID = nil
+                        }
+                    )
+                )
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 12, weight: .regular, design: .rounded))
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Artist B")
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
+                TextField(
+                    context.personName,
+                    text: Binding(
+                        get: { viewModel.coCreditArtistBName },
+                        set: { newValue in
+                            viewModel.coCreditArtistBName = newValue
+                            viewModel.coCreditArtistBMBID = nil
+                        }
+                    )
+                )
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 12, weight: .regular, design: .rounded))
+            }
+        }
+    }
 }
 
 private struct RoleFilterCapsule: View {
@@ -151,6 +220,32 @@ private struct RoleFilterCapsule: View {
     }
 }
 
+private struct PlaylistModeCapsule: View {
+    let label: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(isSelected ? Color(red: 0.25, green: 0.63, blue: 0.94).opacity(0.24) : Color.clear)
+                .background(.thinMaterial, in: Capsule())
+                .overlay(
+                    Capsule()
+                        .strokeBorder(
+                            isSelected ? Color(red: 0.25, green: 0.63, blue: 0.94) : .white.opacity(0.22),
+                            lineWidth: 0.8
+                        )
+                )
+                .foregroundStyle(isSelected ? Color(red: 0.25, green: 0.63, blue: 0.94) : .secondary)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 // MARK: - Artist Search
 
 private struct ArtistSearchView: View {
@@ -170,7 +265,7 @@ private struct ArtistSearchView: View {
             HStack(spacing: 8) {
                 ProgressView()
                     .controlSize(.small)
-                Text("Searching MusicBrainz…")
+                Text("Resolving artists on MusicBrainz…")
                     .font(.system(size: 12, weight: .regular, design: .rounded))
                     .foregroundStyle(.secondary)
             }
