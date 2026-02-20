@@ -408,6 +408,22 @@ enum TrackMatchStrategy: String, Equatable, Codable {
     case textSearch
 }
 
+enum TrackResolutionDropReason: String, Equatable, Codable {
+    case missingArtistCredits
+    case noSpotifyMatch
+}
+
+struct UnresolvedTrack: Equatable {
+    let recordingMBID: String
+    let recordingTitle: String
+    let reason: TrackResolutionDropReason
+}
+
+struct TrackResolutionSummary: Equatable {
+    let resolved: [ResolvedTrack]
+    let unresolved: [UnresolvedTrack]
+}
+
 // MARK: - Spotify Domain Models
 
 struct SpotifyTrack: Equatable {

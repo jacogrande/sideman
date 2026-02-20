@@ -4,6 +4,16 @@ actor TrackMatchingService {
     private let musicBrainzClient: MusicBrainzClient
     private let spotifyClient: SpotifyWebAPI
     private let maxConcurrency: Int
+    private let textSearchMinScore = 0.58
+    private let textSearchStrongScore = 0.80
+    private let maxArtistQueries = 4
+    private let titleNormalization: TextNormalizationOptions = [
+        .stripFeaturingSuffix,
+        .stripParentheticalText,
+        .alphanumericsOnly,
+        .collapseWhitespace
+    ]
+    private let artistNormalization: TextNormalizationOptions = [.alphanumericsOnly, .collapseWhitespace]
 
     init(musicBrainzClient: MusicBrainzClient, spotifyClient: SpotifyWebAPI, maxConcurrency: Int = 8) {
         self.musicBrainzClient = musicBrainzClient
@@ -15,8 +25,18 @@ actor TrackMatchingService {
         recordings: [ArtistRecordingRel],
         onProgress: @escaping @Sendable (Int, Int) async -> Void
     ) async throws -> [ResolvedTrack] {
+        let summary = try await resolveToSpotifyDetailed(recordings: recordings, onProgress: onProgress)
+        return summary.resolved
+    }
+
+    func resolveToSpotifyDetailed(
+        recordings: [ArtistRecordingRel],
+        onProgress: @escaping @Sendable (Int, Int) async -> Void
+    ) async throws -> TrackResolutionSummary {
         let total = recordings.count
-        guard total > 0 else { return [] }
+        guard total > 0 else {
+            return TrackResolutionSummary(resolved: [], unresolved: [])
+        }
 
         // Shared mutable state protected by actor isolation via the progress closure
         let progressCounter = ProgressCounter(total: total, onProgress: onProgress)
@@ -25,6 +45,7 @@ actor TrackMatchingService {
         // batch size and retry the failed items rather than aborting.
         var pending = Array(recordings.enumerated())
         var allResolved: [ResolvedTrack] = []
+        var unresolved: [UnresolvedTrack] = []
         var currentConcurrency = maxConcurrency
 
         while !pending.isEmpty {
@@ -40,8 +61,8 @@ actor TrackMatchingService {
                 switch result {
                 case .resolved(let track):
                     allResolved.append(track)
-                case .notFound:
-                    break
+                case .unresolved(let dropped):
+                    unresolved.append(dropped)
                 case .rateLimited(let item):
                     rateLimited.append(item)
                 }
@@ -61,14 +82,31 @@ actor TrackMatchingService {
         }
 
         await progressCounter.finish()
-        DebugLogger.log(.provider, "track matching complete: \(allResolved.count)/\(total) resolved")
-        return allResolved
+        let unresolvedReasonSummary = Dictionary(grouping: unresolved, by: \.reason)
+            .map { key, value in "\(key.rawValue)=\(value.count)" }
+            .sorted()
+            .joined(separator: ", ")
+        DebugLogger.log(
+            .provider,
+            "track matching complete: \(allResolved.count)/\(total) resolved; unresolved=\(unresolved.count) [\(unresolvedReasonSummary)]"
+        )
+        return TrackResolutionSummary(resolved: allResolved, unresolved: unresolved)
     }
 
     private enum ResolveResult: Sendable {
         case resolved(ResolvedTrack)
-        case notFound
+        case unresolved(UnresolvedTrack)
         case rateLimited((offset: Int, element: ArtistRecordingRel))
+    }
+
+    private enum ResolveOneResult: Sendable {
+        case resolved(ResolvedTrack)
+        case unresolved(TrackResolutionDropReason)
+    }
+
+    private struct ScoredSpotifyTrack {
+        let track: SpotifyTrack
+        let score: Double
     }
 
     private func resolveBatch(
@@ -80,12 +118,20 @@ actor TrackMatchingService {
                 group.addTask {
                     try Task.checkCancellation()
                     do {
-                        let track = try await self.resolveOne(recording: item.element)
+                        let resolution = try await self.resolveOne(recording: item.element)
                         await progressCounter.increment()
-                        if let track {
+                        switch resolution {
+                        case .resolved(let track):
                             return .resolved(track)
+                        case .unresolved(let reason):
+                            return .unresolved(
+                                UnresolvedTrack(
+                                    recordingMBID: item.element.recordingMBID,
+                                    recordingTitle: item.element.recordingTitle,
+                                    reason: reason
+                                )
+                            )
                         }
-                        return .notFound
                     } catch let spotifyError as SpotifyClientError where spotifyError == .rateLimited {
                         return .rateLimited(item)
                     }
@@ -100,9 +146,9 @@ actor TrackMatchingService {
         }
     }
 
-    private func resolveOne(recording: ArtistRecordingRel) async throws -> ResolvedTrack? {
+    private func resolveOne(recording: ArtistRecordingRel) async throws -> ResolveOneResult {
         if let track = try await resolveViaISRC(recording: recording) {
-            return track
+            return .resolved(track)
         }
         return try await resolveViaTextSearch(recording: recording)
     }
@@ -125,15 +171,23 @@ actor TrackMatchingService {
             try Task.checkCancellation()
             do {
                 let tracks = try await spotifyClient.searchTrackByISRC(isrc)
-                if let first = tracks.first {
+                if let best = bestSpotifyCandidate(
+                    in: tracks,
+                    recording: recording,
+                    queryArtist: recording.artistCredits.first ?? "",
+                    isRelaxedQuery: false,
+                    preferredISRC: isrc
+                ) {
                     return ResolvedTrack(
                         recordingMBID: recording.recordingMBID,
                         recordingTitle: recording.recordingTitle,
-                        spotifyURI: first.uri,
-                        spotifyPopularity: first.popularity,
+                        spotifyURI: best.track.uri,
+                        spotifyPopularity: best.track.popularity,
                         matchStrategy: .isrc
                     )
                 }
+            } catch let error as SpotifyClientError where error == .rateLimited {
+                throw error
             } catch {
                 continue
             }
@@ -142,30 +196,291 @@ actor TrackMatchingService {
         return nil
     }
 
-    private func resolveViaTextSearch(recording: ArtistRecordingRel) async throws -> ResolvedTrack? {
-        let artist = recording.artistCredits.first ?? ""
-        guard !artist.isEmpty else { return nil }
-
-        do {
-            let tracks = try await spotifyClient.searchTracks(
-                title: recording.recordingTitle,
-                artist: artist
-            )
-
-            if let first = tracks.first {
-                return ResolvedTrack(
-                    recordingMBID: recording.recordingMBID,
-                    recordingTitle: recording.recordingTitle,
-                    spotifyURI: first.uri,
-                    spotifyPopularity: first.popularity,
-                    matchStrategy: .textSearch
-                )
-            }
-        } catch {
-            DebugLogger.log(.provider, "text search failed for '\(recording.recordingTitle)': \(error)")
+    private func resolveViaTextSearch(recording: ArtistRecordingRel) async throws -> ResolveOneResult {
+        let artistQueries = buildArtistQueries(from: recording.artistCredits)
+        guard !artistQueries.isEmpty else {
+            return .unresolved(.missingArtistCredits)
         }
 
-        return nil
+        let titleQueries = buildTitleQueries(for: recording.recordingTitle)
+        var best: ScoredSpotifyTrack?
+
+        searchLoop: for (titleIndex, titleQuery) in titleQueries.enumerated() {
+            let isRelaxed = titleIndex > 0
+
+            for artistQuery in artistQueries.prefix(maxArtistQueries) {
+                try Task.checkCancellation()
+
+                do {
+                    let tracks = try await spotifyClient.searchTracks(
+                        title: titleQuery,
+                        artist: artistQuery
+                    )
+                    guard !tracks.isEmpty else {
+                        continue
+                    }
+
+                    if let candidate = bestSpotifyCandidate(
+                        in: tracks,
+                        recording: recording,
+                        queryArtist: artistQuery,
+                        isRelaxedQuery: isRelaxed,
+                        preferredISRC: nil
+                    ) {
+                        if let currentBest = best {
+                            best = chooseBetter(currentBest, candidate)
+                        } else {
+                            best = candidate
+                        }
+
+                        if let best, best.score >= textSearchStrongScore {
+                            break searchLoop
+                        }
+                    }
+                } catch let error as SpotifyClientError where error == .rateLimited {
+                    throw error
+                } catch {
+                    DebugLogger.log(.provider, "text search failed for '\(recording.recordingTitle)' artist='\(artistQuery)': \(error)")
+                }
+            }
+        }
+
+        guard let best else {
+            return .unresolved(.noSpotifyMatch)
+        }
+
+        guard best.score >= textSearchMinScore else {
+            DebugLogger.log(
+                .provider,
+                "text search rejected '\(recording.recordingTitle)' bestScore=\(String(format: "%.3f", best.score))"
+            )
+            return .unresolved(.noSpotifyMatch)
+        }
+
+        return .resolved(
+            ResolvedTrack(
+                recordingMBID: recording.recordingMBID,
+                recordingTitle: recording.recordingTitle,
+                spotifyURI: best.track.uri,
+                spotifyPopularity: best.track.popularity,
+                matchStrategy: .textSearch
+            )
+        )
+    }
+
+    private func chooseBetter(_ lhs: ScoredSpotifyTrack, _ rhs: ScoredSpotifyTrack) -> ScoredSpotifyTrack {
+        if rhs.score == lhs.score {
+            return (rhs.track.popularity ?? 0) > (lhs.track.popularity ?? 0) ? rhs : lhs
+        }
+        return rhs.score > lhs.score ? rhs : lhs
+    }
+
+    private func bestSpotifyCandidate(
+        in tracks: [SpotifyTrack],
+        recording: ArtistRecordingRel,
+        queryArtist: String,
+        isRelaxedQuery: Bool,
+        preferredISRC: String?
+    ) -> ScoredSpotifyTrack? {
+        tracks
+            .map { track in
+                ScoredSpotifyTrack(
+                    track: track,
+                    score: score(
+                        track: track,
+                        recording: recording,
+                        queryArtist: queryArtist,
+                        isRelaxedQuery: isRelaxedQuery,
+                        preferredISRC: preferredISRC
+                    )
+                )
+            }
+            .max { lhs, rhs in
+                if lhs.score == rhs.score {
+                    return (lhs.track.popularity ?? 0) < (rhs.track.popularity ?? 0)
+                }
+                return lhs.score < rhs.score
+            }
+    }
+
+    private func score(
+        track: SpotifyTrack,
+        recording: ArtistRecordingRel,
+        queryArtist: String,
+        isRelaxedQuery: Bool,
+        preferredISRC: String?
+    ) -> Double {
+        let normalizedRecordingTitle = CreditsTextNormalizer.normalize(recording.recordingTitle, options: titleNormalization)
+        let normalizedSpotifyTitle = CreditsTextNormalizer.normalize(track.name, options: titleNormalization)
+        let titleSimilarity = CreditsTextSimilarity.jaccardSimilarity(
+            normalizedRecordingTitle,
+            normalizedSpotifyTitle,
+            containsMatchScore: 0.94
+        )
+
+        let normalizedRecordingArtists = recording.artistCredits
+            .map { CreditsTextNormalizer.normalize($0, options: artistNormalization) }
+            .filter { !$0.isEmpty }
+        let normalizedSpotifyArtists = track.artistNames
+            .map { CreditsTextNormalizer.normalize($0, options: artistNormalization) }
+            .filter { !$0.isEmpty }
+
+        let bestArtistSimilarity = maxArtistSimilarity(
+            sourceArtists: normalizedRecordingArtists,
+            candidateArtists: normalizedSpotifyArtists
+        )
+        let artistCoverage = artistCoverageScore(
+            sourceArtists: normalizedRecordingArtists,
+            candidateArtists: normalizedSpotifyArtists
+        )
+
+        let normalizedQueryArtist = CreditsTextNormalizer.normalize(queryArtist, options: artistNormalization)
+        let queryArtistSimilarity = queryArtistArtistSimilarity(
+            queryArtist: normalizedQueryArtist,
+            candidateArtists: normalizedSpotifyArtists
+        )
+
+        var total = 0.63 * titleSimilarity
+        total += 0.23 * bestArtistSimilarity
+        total += 0.08 * artistCoverage
+        total += 0.04 * queryArtistSimilarity
+        total += 0.02 * popularityScore(track.popularity)
+
+        if isPreferredISRC(track: track, recording: recording, preferredISRC: preferredISRC) {
+            total += 0.25
+        }
+
+        if isRelaxedQuery {
+            total -= 0.03
+        }
+
+        return max(0, min(total, 1.5))
+    }
+
+    private func maxArtistSimilarity(sourceArtists: [String], candidateArtists: [String]) -> Double {
+        guard !sourceArtists.isEmpty, !candidateArtists.isEmpty else {
+            return 0
+        }
+
+        var best = 0.0
+        for source in sourceArtists {
+            for candidate in candidateArtists {
+                let similarity = CreditsTextSimilarity.jaccardSimilarity(source, candidate, containsMatchScore: 0.9)
+                if similarity > best {
+                    best = similarity
+                }
+            }
+        }
+        return best
+    }
+
+    private func artistCoverageScore(sourceArtists: [String], candidateArtists: [String]) -> Double {
+        guard !sourceArtists.isEmpty, !candidateArtists.isEmpty else {
+            return 0
+        }
+
+        let matchedCount = sourceArtists.filter { source in
+            candidateArtists.contains { candidate in
+                CreditsTextSimilarity.jaccardSimilarity(source, candidate, containsMatchScore: 0.9) >= 0.75
+            }
+        }.count
+
+        return Double(matchedCount) / Double(sourceArtists.count)
+    }
+
+    private func queryArtistArtistSimilarity(queryArtist: String, candidateArtists: [String]) -> Double {
+        guard !queryArtist.isEmpty, !candidateArtists.isEmpty else {
+            return 0
+        }
+        return candidateArtists.map {
+            CreditsTextSimilarity.jaccardSimilarity(queryArtist, $0, containsMatchScore: 0.9)
+        }.max() ?? 0
+    }
+
+    private func popularityScore(_ popularity: Int?) -> Double {
+        let clamped = max(0, min(100, popularity ?? 0))
+        return Double(clamped) / 100.0
+    }
+
+    private func isPreferredISRC(track: SpotifyTrack, recording: ArtistRecordingRel, preferredISRC: String?) -> Bool {
+        guard let trackISRC = track.isrc?.uppercased() else {
+            return false
+        }
+
+        if let preferredISRC = preferredISRC?.uppercased(), trackISRC == preferredISRC {
+            return true
+        }
+
+        return recording.isrcs.contains { $0.uppercased() == trackISRC }
+    }
+
+    private func buildArtistQueries(from credits: [String]) -> [String] {
+        var seen = Set<String>()
+        var ordered: [String] = []
+
+        for artist in credits {
+            let trimmed = artist.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                continue
+            }
+
+            let key = CreditsTextNormalizer.normalize(trimmed, options: artistNormalization)
+            if key.isEmpty {
+                continue
+            }
+            if seen.insert(key).inserted {
+                ordered.append(trimmed)
+            }
+        }
+
+        return ordered
+    }
+
+    private func buildTitleQueries(for title: String) -> [String] {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return []
+        }
+
+        var variants: [String] = [trimmed]
+        let withoutParens = trimmed.replacingOccurrences(
+            of: #"\([^\)]*\)"#,
+            with: " ",
+            options: .regularExpression
+        )
+        let withoutFeat = withoutParens.replacingOccurrences(
+            of: #"\b(feat\.?|featuring)\b.*$"#,
+            with: " ",
+            options: .regularExpression
+        )
+        let cleanedWithoutFeat = withoutFeat
+            .split(separator: " ")
+            .map(String.init)
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !cleanedWithoutFeat.isEmpty, cleanedWithoutFeat.caseInsensitiveCompare(trimmed) != .orderedSame {
+            variants.append(cleanedWithoutFeat)
+        }
+
+        if let dashRange = trimmed.range(of: " - ") {
+            let beforeDash = String(trimmed[..<dashRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !beforeDash.isEmpty, beforeDash.caseInsensitiveCompare(trimmed) != .orderedSame {
+                variants.append(beforeDash)
+            }
+        }
+
+        var deduped: [String] = []
+        var seen = Set<String>()
+        for variant in variants {
+            let key = variant.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if key.isEmpty {
+                continue
+            }
+            if seen.insert(key).inserted {
+                deduped.append(variant)
+            }
+        }
+        return deduped
     }
 }
 

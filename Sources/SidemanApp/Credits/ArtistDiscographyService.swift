@@ -3,6 +3,13 @@ import Foundation
 actor ArtistDiscographyService {
     private let musicBrainzClient: MusicBrainzClient
     private let cache: DiscographyCache
+    private let coCreditTitleNormalization: TextNormalizationOptions = [
+        .stripFeaturingSuffix,
+        .stripParentheticalText,
+        .alphanumericsOnly,
+        .collapseWhitespace
+    ]
+    private let coCreditArtistNormalization: TextNormalizationOptions = [.alphanumericsOnly, .collapseWhitespace]
 
     init(musicBrainzClient: MusicBrainzClient, cache: DiscographyCache) {
         self.musicBrainzClient = musicBrainzClient
@@ -34,20 +41,35 @@ actor ArtistDiscographyService {
         let discographyA = try await fetchAllDiscography(artistMBID: artistA.mbid, artistName: artistA.name)
         let discographyB = try await fetchAllDiscography(artistMBID: artistB.mbid, artistName: artistB.name)
 
-        let intersected: [ArtistRecordingRel]
+        let intersection: CoCreditIntersectionResult
         switch matchMode {
         case .anyInvolvement:
-            intersected = intersectRecordings(lhs: discographyA.recordings, rhs: discographyB.recordings)
+            intersection = intersectRecordings(lhs: discographyA.recordings, rhs: discographyB.recordings)
         }
 
-        guard !intersected.isEmpty else {
+        DebugLogger.log(
+            .provider,
+            "co-credit join '\(artistA.name)' x '\(artistB.name)': " +
+            "left=\(discographyA.recordings.count) right=\(discographyB.recordings.count) " +
+            "joined=\(intersection.recordings.count) mbid=\(intersection.mbidMatches) fallback=\(intersection.fallbackMatches) " +
+            "not_in_intersection.left=\(intersection.leftOnlyCount) not_in_intersection.right=\(intersection.rightOnlyCount)"
+        )
+
+        if !intersection.leftOnlySample.isEmpty || !intersection.rightOnlySample.isEmpty {
+            DebugLogger.log(
+                .provider,
+                "co-credit unmatched samples left=\(intersection.leftOnlySample.joined(separator: " | ")) right=\(intersection.rightOnlySample.joined(separator: " | "))"
+            )
+        }
+
+        guard !intersection.recordings.isEmpty else {
             throw PlaylistBuilderError.noIntersectionFound
         }
 
         let result = DiscographyResult(
             artistMBID: pairKey,
             artistName: "\(artistA.name) × \(artistB.name)",
-            recordings: intersected,
+            recordings: intersection.recordings,
             fetchedAt: Date()
         )
 
@@ -143,32 +165,214 @@ actor ArtistDiscographyService {
         return "co-credit:\(sorted[0])|\(sorted[1])|\(matchMode.rawValue)"
     }
 
-    private func intersectRecordings(lhs: [ArtistRecordingRel], rhs: [ArtistRecordingRel]) -> [ArtistRecordingRel] {
+    private func intersectRecordings(lhs: [ArtistRecordingRel], rhs: [ArtistRecordingRel]) -> CoCreditIntersectionResult {
         let lhsByMBID = Dictionary(grouping: lhs, by: \.recordingMBID)
         let rhsByMBID = Dictionary(grouping: rhs, by: \.recordingMBID)
         let sharedIDs = Set(lhsByMBID.keys).intersection(rhsByMBID.keys)
 
-        return sharedIDs.compactMap { recordingID in
+        var merged: [ArtistRecordingRel] = []
+        var matchedLHSIDs = Set<String>()
+        var matchedRHSIDs = Set<String>()
+        var mbidMatches = 0
+
+        for recordingID in sharedIDs {
             guard
                 let lhsBest = lhsByMBID[recordingID].flatMap(preferredRecording(from:)),
                 let rhsBest = rhsByMBID[recordingID].flatMap(preferredRecording(from:))
             else {
-                return nil
+                continue
             }
 
-            let preferred = choosePreferred(lhs: lhsBest, rhs: rhsBest)
-            return ArtistRecordingRel(
-                recordingMBID: preferred.recordingMBID,
-                recordingTitle: preferred.recordingTitle,
-                relationshipType: preferred.relationshipType,
-                attributes: mergedUnique(lhsBest.attributes, rhsBest.attributes),
-                artistCredits: mergedUnique(lhsBest.artistCredits, rhsBest.artistCredits),
-                isrcs: mergedUnique(lhsBest.isrcs, rhsBest.isrcs)
-            )
+            merged.append(mergeRecordings(lhs: lhsBest, rhs: rhsBest))
+            matchedLHSIDs.insert(lhsBest.recordingMBID)
+            matchedRHSIDs.insert(rhsBest.recordingMBID)
+            mbidMatches += 1
         }
-        .sorted { lhs, rhs in
+
+        let unmatchedLHS = lhs.filter { !matchedLHSIDs.contains($0.recordingMBID) }
+        let unmatchedRHS = rhs.filter { !matchedRHSIDs.contains($0.recordingMBID) }
+
+        let fallbackMatches = fallbackMatches(lhs: unmatchedLHS, rhs: unmatchedRHS)
+        for match in fallbackMatches {
+            merged.append(match.recording)
+            matchedLHSIDs.insert(match.leftMBID)
+            matchedRHSIDs.insert(match.rightMBID)
+        }
+
+        let sortedRecordings = merged.sorted { lhs, rhs in
             lhs.recordingTitle.localizedCaseInsensitiveCompare(rhs.recordingTitle) == .orderedAscending
         }
+        let leftOnlySample = unmatchedLHS
+            .filter { !matchedLHSIDs.contains($0.recordingMBID) }
+            .prefix(4)
+            .map(\.recordingTitle)
+        let rightOnlySample = unmatchedRHS
+            .filter { !matchedRHSIDs.contains($0.recordingMBID) }
+            .prefix(4)
+            .map(\.recordingTitle)
+
+        return CoCreditIntersectionResult(
+            recordings: sortedRecordings,
+            mbidMatches: mbidMatches,
+            fallbackMatches: fallbackMatches.count,
+            leftOnlyCount: lhs.count - matchedLHSIDs.count,
+            rightOnlyCount: rhs.count - matchedRHSIDs.count,
+            leftOnlySample: Array(leftOnlySample),
+            rightOnlySample: Array(rightOnlySample)
+        )
+    }
+
+    private func mergeRecordings(lhs: ArtistRecordingRel, rhs: ArtistRecordingRel) -> ArtistRecordingRel {
+        let preferred = choosePreferred(lhs: lhs, rhs: rhs)
+        return ArtistRecordingRel(
+            recordingMBID: preferred.recordingMBID,
+            recordingTitle: preferred.recordingTitle,
+            relationshipType: preferred.relationshipType,
+            attributes: mergedUnique(lhs.attributes, rhs.attributes),
+            artistCredits: mergedUnique(lhs.artistCredits, rhs.artistCredits),
+            isrcs: mergedUnique(lhs.isrcs, rhs.isrcs)
+        )
+    }
+
+    private struct CoCreditFallbackMatch {
+        let recording: ArtistRecordingRel
+        let leftMBID: String
+        let rightMBID: String
+    }
+
+    private struct CoCreditIntersectionResult {
+        let recordings: [ArtistRecordingRel]
+        let mbidMatches: Int
+        let fallbackMatches: Int
+        let leftOnlyCount: Int
+        let rightOnlyCount: Int
+        let leftOnlySample: [String]
+        let rightOnlySample: [String]
+    }
+
+    private func fallbackMatches(lhs: [ArtistRecordingRel], rhs: [ArtistRecordingRel]) -> [CoCreditFallbackMatch] {
+        guard !lhs.isEmpty, !rhs.isEmpty else {
+            return []
+        }
+
+        var rhsByTitle: [String: [ArtistRecordingRel]] = [:]
+        for recording in rhs {
+            let key = normalizedCoCreditTitle(recording.recordingTitle)
+            guard !key.isEmpty else {
+                continue
+            }
+            rhsByTitle[key, default: []].append(recording)
+        }
+
+        var usedRightMBIDs = Set<String>()
+        var matches: [CoCreditFallbackMatch] = []
+
+        for left in lhs.sorted(by: { $0.recordingTitle.localizedCaseInsensitiveCompare($1.recordingTitle) == .orderedAscending }) {
+            let titleKey = normalizedCoCreditTitle(left.recordingTitle)
+            guard !titleKey.isEmpty else {
+                continue
+            }
+
+            let candidates = rhsByTitle[titleKey, default: []]
+                .filter { !usedRightMBIDs.contains($0.recordingMBID) }
+            guard !candidates.isEmpty else {
+                continue
+            }
+
+            let scored = candidates.compactMap { right -> (recording: ArtistRecordingRel, rightMBID: String, score: Double)? in
+                guard let score = fallbackMatchScore(left: left, right: right) else {
+                    return nil
+                }
+                return (mergeRecordings(lhs: left, rhs: right), right.recordingMBID, score)
+            }
+
+            guard let best = scored.max(by: { lhs, rhs in
+                if lhs.score == rhs.score {
+                    return lhs.recording.recordingTitle.localizedCaseInsensitiveCompare(rhs.recording.recordingTitle) == .orderedDescending
+                }
+                return lhs.score < rhs.score
+            }) else {
+                continue
+            }
+
+            matches.append(
+                CoCreditFallbackMatch(
+                    recording: best.recording,
+                    leftMBID: left.recordingMBID,
+                    rightMBID: best.rightMBID
+                )
+            )
+            usedRightMBIDs.insert(best.rightMBID)
+        }
+
+        return matches
+    }
+
+    private func fallbackMatchScore(left: ArtistRecordingRel, right: ArtistRecordingRel) -> Double? {
+        let sharedISRCCount = sharedISRCs(left: left, right: right).count
+        if sharedISRCCount > 0 {
+            return 1.20 + 0.05 * Double(min(sharedISRCCount, 3))
+        }
+
+        let titleSimilarity = CreditsTextSimilarity.jaccardSimilarity(
+            normalizedCoCreditTitle(left.recordingTitle),
+            normalizedCoCreditTitle(right.recordingTitle),
+            containsMatchScore: 0.95
+        )
+        guard titleSimilarity >= 0.86 else {
+            return nil
+        }
+
+        guard let artistOverlap = artistCreditOverlapRatio(left: left, right: right), artistOverlap >= 0.34 else {
+            return nil
+        }
+
+        return (0.70 * titleSimilarity) + (0.30 * artistOverlap)
+    }
+
+    private func normalizedCoCreditTitle(_ title: String) -> String {
+        var trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let dashRange = trimmed.range(of: " - ") {
+            let beforeDash = String(trimmed[..<dashRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !beforeDash.isEmpty {
+                trimmed = beforeDash
+            }
+        }
+        return CreditsTextNormalizer.normalize(trimmed, options: coCreditTitleNormalization)
+    }
+
+    private func artistCreditOverlapRatio(left: ArtistRecordingRel, right: ArtistRecordingRel) -> Double? {
+        let leftArtists = Set(
+            left.artistCredits
+                .map { CreditsTextNormalizer.normalize($0, options: coCreditArtistNormalization) }
+                .filter { !$0.isEmpty }
+        )
+        let rightArtists = Set(
+            right.artistCredits
+                .map { CreditsTextNormalizer.normalize($0, options: coCreditArtistNormalization) }
+                .filter { !$0.isEmpty }
+        )
+
+        guard !leftArtists.isEmpty, !rightArtists.isEmpty else {
+            return nil
+        }
+
+        let overlap = leftArtists.intersection(rightArtists).count
+        if overlap == 0 {
+            return nil
+        }
+
+        let baseline = min(leftArtists.count, rightArtists.count)
+        guard baseline > 0 else {
+            return nil
+        }
+        return Double(overlap) / Double(baseline)
+    }
+
+    private func sharedISRCs(left: ArtistRecordingRel, right: ArtistRecordingRel) -> Set<String> {
+        let leftISRCs = Set(left.isrcs.map { $0.uppercased() })
+        let rightISRCs = Set(right.isrcs.map { $0.uppercased() })
+        return leftISRCs.intersection(rightISRCs)
     }
 
     private func preferredRecording(from candidates: [ArtistRecordingRel]) -> ArtistRecordingRel? {

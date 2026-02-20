@@ -299,6 +299,97 @@ final class ArtistDiscographyServiceTests: XCTestCase {
         XCTAssertEqual(firstCalls.relCalls, secondCalls.relCalls)
         XCTAssertEqual(firstCalls.browseCalls, secondCalls.browseCalls)
     }
+
+    func testFetchCoCreditDiscographyFallsBackToTitleAndArtistCreditOverlap() async throws {
+        let client = StubMBClient(
+            artistRecordingRelsByID: [
+                "artist-a": [
+                    ArtistRecordingRel(
+                        recordingMBID: "rec-a-beautiful",
+                        recordingTitle: "Beautiful (Album Version)",
+                        relationshipType: "main",
+                        attributes: [],
+                        artistCredits: ["Snoop Dogg", "Pharrell Williams"],
+                        isrcs: []
+                    )
+                ],
+                "artist-b": [
+                    ArtistRecordingRel(
+                        recordingMBID: "rec-b-beautiful",
+                        recordingTitle: "Beautiful",
+                        relationshipType: "producer",
+                        attributes: [],
+                        artistCredits: ["Snoop Dogg", "Pharrell Williams"],
+                        isrcs: []
+                    )
+                ]
+            ],
+            browsePagesByArtist: [
+                "artist-a": [MBBrowseRecordingsPage(recordings: [], totalCount: 0, offset: 0)],
+                "artist-b": [MBBrowseRecordingsPage(recordings: [], totalCount: 0, offset: 0)]
+            ]
+        )
+
+        let cache = DiscographyCache(fileURL: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("test-disco-\(UUID().uuidString).json"))
+        let service = ArtistDiscographyService(musicBrainzClient: client, cache: cache)
+
+        let result = try await service.fetchCoCreditDiscography(
+            artistA: CoCreditArtist(name: "Snoop Dogg", mbid: "artist-a"),
+            artistB: CoCreditArtist(name: "Pharrell Williams", mbid: "artist-b"),
+            matchMode: .anyInvolvement
+        )
+
+        XCTAssertEqual(result.recordings.count, 1)
+        XCTAssertEqual(result.recordings.first?.recordingTitle, "Beautiful (Album Version)")
+        XCTAssertEqual(
+            Set(result.recordings.first?.artistCredits ?? []),
+            Set(["Snoop Dogg", "Pharrell Williams"])
+        )
+    }
+
+    func testFetchCoCreditDiscographyFallsBackToSharedISRCWhenArtistCreditsDiffer() async throws {
+        let client = StubMBClient(
+            artistRecordingRelsByID: [
+                "artist-a": [
+                    ArtistRecordingRel(
+                        recordingMBID: "rec-a",
+                        recordingTitle: "Beautiful - Radio Edit",
+                        relationshipType: "main",
+                        attributes: [],
+                        artistCredits: ["Snoop Dogg"],
+                        isrcs: ["US1234567890"]
+                    )
+                ],
+                "artist-b": [
+                    ArtistRecordingRel(
+                        recordingMBID: "rec-b",
+                        recordingTitle: "Beautiful",
+                        relationshipType: "producer",
+                        attributes: [],
+                        artistCredits: ["Pharrell Williams"],
+                        isrcs: ["us1234567890"]
+                    )
+                ]
+            ],
+            browsePagesByArtist: [
+                "artist-a": [MBBrowseRecordingsPage(recordings: [], totalCount: 0, offset: 0)],
+                "artist-b": [MBBrowseRecordingsPage(recordings: [], totalCount: 0, offset: 0)]
+            ]
+        )
+
+        let cache = DiscographyCache(fileURL: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("test-disco-\(UUID().uuidString).json"))
+        let service = ArtistDiscographyService(musicBrainzClient: client, cache: cache)
+
+        let result = try await service.fetchCoCreditDiscography(
+            artistA: CoCreditArtist(name: "Snoop Dogg", mbid: "artist-a"),
+            artistB: CoCreditArtist(name: "Pharrell Williams", mbid: "artist-b"),
+            matchMode: .anyInvolvement
+        )
+
+        XCTAssertEqual(result.recordings.count, 1)
+        XCTAssertEqual(result.recordings.first?.recordingMBID, "rec-a")
+        XCTAssertEqual(result.recordings.first?.isrcs, ["US1234567890"])
+    }
 }
 
 private actor StubMBClient: MusicBrainzClient {
