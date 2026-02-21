@@ -23,14 +23,20 @@ actor TrackMatchingService {
 
     func resolveToSpotify(
         recordings: [ArtistRecordingRel],
+        fallbackArtistQueries: [String] = [],
         onProgress: @escaping @Sendable (Int, Int) async -> Void
     ) async throws -> [ResolvedTrack] {
-        let summary = try await resolveToSpotifyDetailed(recordings: recordings, onProgress: onProgress)
+        let summary = try await resolveToSpotifyDetailed(
+            recordings: recordings,
+            fallbackArtistQueries: fallbackArtistQueries,
+            onProgress: onProgress
+        )
         return summary.resolved
     }
 
     func resolveToSpotifyDetailed(
         recordings: [ArtistRecordingRel],
+        fallbackArtistQueries: [String] = [],
         onProgress: @escaping @Sendable (Int, Int) async -> Void
     ) async throws -> TrackResolutionSummary {
         let total = recordings.count
@@ -54,7 +60,11 @@ actor TrackMatchingService {
             let batch = Array(pending.prefix(currentConcurrency))
             pending.removeFirst(batch.count)
 
-            let results = try await resolveBatch(batch, progressCounter: progressCounter)
+            let results = try await resolveBatch(
+                batch,
+                fallbackArtistQueries: fallbackArtistQueries,
+                progressCounter: progressCounter
+            )
 
             var rateLimited: [(offset: Int, element: ArtistRecordingRel)] = []
             for result in results {
@@ -111,6 +121,7 @@ actor TrackMatchingService {
 
     private func resolveBatch(
         _ items: [(offset: Int, element: ArtistRecordingRel)],
+        fallbackArtistQueries: [String],
         progressCounter: ProgressCounter
     ) async throws -> [ResolveResult] {
         try await withThrowingTaskGroup(of: ResolveResult.self) { group in
@@ -118,7 +129,10 @@ actor TrackMatchingService {
                 group.addTask {
                     try Task.checkCancellation()
                     do {
-                        let resolution = try await self.resolveOne(recording: item.element)
+                        let resolution = try await self.resolveOne(
+                            recording: item.element,
+                            fallbackArtistQueries: fallbackArtistQueries
+                        )
                         await progressCounter.increment()
                         switch resolution {
                         case .resolved(let track):
@@ -146,11 +160,14 @@ actor TrackMatchingService {
         }
     }
 
-    private func resolveOne(recording: ArtistRecordingRel) async throws -> ResolveOneResult {
+    private func resolveOne(
+        recording: ArtistRecordingRel,
+        fallbackArtistQueries: [String]
+    ) async throws -> ResolveOneResult {
         if let track = try await resolveViaISRC(recording: recording) {
             return .resolved(track)
         }
-        return try await resolveViaTextSearch(recording: recording)
+        return try await resolveViaTextSearch(recording: recording, fallbackArtistQueries: fallbackArtistQueries)
     }
 
     private func resolveViaISRC(recording: ArtistRecordingRel) async throws -> ResolvedTrack? {
@@ -196,8 +213,17 @@ actor TrackMatchingService {
         return nil
     }
 
-    private func resolveViaTextSearch(recording: ArtistRecordingRel) async throws -> ResolveOneResult {
-        let artistQueries = buildArtistQueries(from: recording.artistCredits)
+    private func resolveViaTextSearch(
+        recording: ArtistRecordingRel,
+        fallbackArtistQueries: [String]
+    ) async throws -> ResolveOneResult {
+        let primaryArtistQueries = buildArtistQueries(from: recording.artistCredits)
+        let artistQueries: [String]
+        if primaryArtistQueries.isEmpty {
+            artistQueries = buildArtistQueries(from: fallbackArtistQueries)
+        } else {
+            artistQueries = primaryArtistQueries
+        }
         guard !artistQueries.isEmpty else {
             return .unresolved(.missingArtistCredits)
         }

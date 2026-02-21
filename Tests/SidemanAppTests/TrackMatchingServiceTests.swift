@@ -132,6 +132,44 @@ final class TrackMatchingServiceTests: XCTestCase {
         XCTAssertEqual(summary.unresolved.count, 1)
         XCTAssertEqual(summary.unresolved.first?.reason, .missingArtistCredits)
     }
+
+    func testResolveToSpotifyDetailedUsesFallbackArtistsWhenCreditsMissing() async throws {
+        let recording = ArtistRecordingRel(
+            recordingMBID: "rec-5",
+            recordingTitle: "From tha Chuuuch to da Palace",
+            relationshipType: "producer",
+            attributes: [],
+            artistCredits: [],
+            isrcs: []
+        )
+
+        let spotifyClient = StubSpotifyWebAPI(
+            searchTracksResponses: [
+                "From tha Chuuuch to da Palace||Snoop Dogg": [
+                    spotifyTrack(
+                        id: "sp-5",
+                        name: "From tha Chuuuch to da Palace",
+                        uri: "spotify:track:5",
+                        artists: ["Snoop Dogg", "Pharrell Williams"],
+                        popularity: 70
+                    )
+                ]
+            ]
+        )
+        let mbClient = StubMusicBrainzClient()
+        let service = TrackMatchingService(musicBrainzClient: mbClient, spotifyClient: spotifyClient, maxConcurrency: 1)
+
+        let summary = try await service.resolveToSpotifyDetailed(
+            recordings: [recording],
+            fallbackArtistQueries: ["Snoop Dogg", "Pharrell Williams"]
+        ) { _, _ in }
+
+        XCTAssertEqual(summary.resolved.count, 1)
+        XCTAssertTrue(summary.unresolved.isEmpty)
+
+        let queries = await spotifyClient.recordedTextQueries()
+        XCTAssertTrue(queries.contains("From tha Chuuuch to da Palace||Snoop Dogg"))
+    }
 }
 
 private actor StubMusicBrainzClient: MusicBrainzClient {
