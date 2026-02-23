@@ -26,6 +26,7 @@ enum CreditsBackend: String {
 enum CreditsProviderFactory {
     static func makePlaylistBuilder(spotifyClient: SpotifyWebAPI) -> PlaylistBuilder {
         let musicBrainzClient = MusicBrainzHTTPClient()
+        let discogsClient = makeDiscogsClient()
         let discographyCache = DiscographyCache()
         let discographyService = ArtistDiscographyService(
             musicBrainzClient: musicBrainzClient,
@@ -34,7 +35,8 @@ enum CreditsProviderFactory {
         let listenBrainzClient = ListenBrainzClient()
         let trackMatchingService = TrackMatchingService(
             musicBrainzClient: musicBrainzClient,
-            spotifyClient: spotifyClient
+            spotifyClient: spotifyClient,
+            discogsClient: discogsClient
         )
         return PlaylistBuilder(
             discographyService: discographyService,
@@ -42,6 +44,20 @@ enum CreditsProviderFactory {
             trackMatchingService: trackMatchingService,
             spotifyClient: spotifyClient
         )
+    }
+
+    private static func makeDiscogsClient(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> DiscogsClient? {
+        let token = (environment["SIDEMAN_DISCOGS_TOKEN"] ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else {
+            DebugLogger.log(.app, "Discogs integration disabled (SIDEMAN_DISCOGS_TOKEN not set)")
+            return nil
+        }
+
+        DebugLogger.log(.app, "Discogs integration enabled")
+        return DiscogsHTTPClient(token: token)
     }
 
     static func makeProvider(backend: CreditsBackend, cache: CreditsCache) -> CreditsProvider {

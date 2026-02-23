@@ -13,6 +13,10 @@ protocol MusicBrainzClient {
     func searchArtists(name: String) async throws -> [MBArtistSearchResult]
 }
 
+protocol DiscogsClient {
+    func artistHintsForTrack(title: String, artistHints: [String], limit: Int) async throws -> [String]
+}
+
 protocol WikipediaAPIClient {
     func searchPages(query: String, limit: Int) async throws -> [WikipediaSearchResult]
     func fetchPage(pageID: Int) async throws -> WikipediaPageContent

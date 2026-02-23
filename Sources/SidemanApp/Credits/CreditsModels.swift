@@ -279,6 +279,14 @@ enum WikipediaClientError: Error, Equatable {
     case network(String)
 }
 
+enum DiscogsClientError: Error, Equatable {
+    case unauthorized
+    case rateLimited
+    case httpStatus(Int)
+    case decoding(String)
+    case network(String)
+}
+
 struct WikipediaSearchResult: Equatable {
     let pageID: Int
     let title: String
@@ -578,6 +586,9 @@ enum PlaylistMode: String, Equatable, Codable, CaseIterable {
     }
 }
 
+/// Determines how two artist discographies are intersected.
+/// `.anyInvolvement` matches recordings where both artists appear in any role.
+/// Future modes (e.g. role-specific matching) can be added here.
 enum CoCreditMatchMode: String, Equatable, Codable {
     case anyInvolvement
 
@@ -627,10 +638,10 @@ struct PlaylistBuildRequest {
         self.coCredit = coCredit
     }
 
-    init(coCredit: CoCreditConfig, isPublic: Bool = false, maxTracks: Int = 100) {
+    init(coCredit: CoCreditConfig, roleFilter: CreditRoleGroup? = nil, isPublic: Bool = false, maxTracks: Int = 100) {
         self.artistMBID = coCredit.artistA.mbid
         self.artistName = coCredit.artistA.name
-        self.roleFilter = nil
+        self.roleFilter = roleFilter
         self.isPublic = isPublic
         self.maxTracks = maxTracks
         self.mode = .coCredit

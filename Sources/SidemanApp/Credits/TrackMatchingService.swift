@@ -3,6 +3,7 @@ import Foundation
 actor TrackMatchingService {
     private let musicBrainzClient: MusicBrainzClient
     private let spotifyClient: SpotifyWebAPI
+    private let discogsClient: DiscogsClient?
     private let maxConcurrency: Int
     private let textSearchMinScore = 0.58
     private let textSearchStrongScore = 0.80
@@ -15,9 +16,15 @@ actor TrackMatchingService {
     ]
     private let artistNormalization: TextNormalizationOptions = [.alphanumericsOnly, .collapseWhitespace]
 
-    init(musicBrainzClient: MusicBrainzClient, spotifyClient: SpotifyWebAPI, maxConcurrency: Int = 8) {
+    init(
+        musicBrainzClient: MusicBrainzClient,
+        spotifyClient: SpotifyWebAPI,
+        discogsClient: DiscogsClient? = nil,
+        maxConcurrency: Int = 8
+    ) {
         self.musicBrainzClient = musicBrainzClient
         self.spotifyClient = spotifyClient
+        self.discogsClient = discogsClient
         self.maxConcurrency = maxConcurrency
     }
 
@@ -217,20 +224,88 @@ actor TrackMatchingService {
         recording: ArtistRecordingRel,
         fallbackArtistQueries: [String]
     ) async throws -> ResolveOneResult {
-        let primaryArtistQueries = buildArtistQueries(from: recording.artistCredits)
-        let artistQueries: [String]
-        if primaryArtistQueries.isEmpty {
-            artistQueries = buildArtistQueries(from: fallbackArtistQueries)
-        } else {
-            artistQueries = primaryArtistQueries
-        }
-        guard !artistQueries.isEmpty else {
-            return .unresolved(.missingArtistCredits)
-        }
-
         let titleQueries = buildTitleQueries(for: recording.recordingTitle)
-        var best: ScoredSpotifyTrack?
+        let baseArtistQueries = buildArtistQueries(from: recording.artistCredits + fallbackArtistQueries)
 
+        var queriedArtistKeys = Set(baseArtistQueries.map(normalizedArtistKey))
+        var best = try await findBestViaTextSearch(
+            recording: recording,
+            titleQueries: titleQueries,
+            artistQueries: baseArtistQueries
+        )
+
+        var discogsQueries: [String] = []
+        if best == nil, let discogsClient {
+            let seedArtists = !baseArtistQueries.isEmpty ? baseArtistQueries : fallbackArtistQueries
+            do {
+                let hints = try await discogsClient.artistHintsForTrack(
+                    title: recording.recordingTitle,
+                    artistHints: seedArtists,
+                    limit: maxArtistQueries
+                )
+                discogsQueries = buildArtistQueries(from: hints).filter { artist in
+                    queriedArtistKeys.insert(normalizedArtistKey(artist)).inserted
+                }
+                if !discogsQueries.isEmpty {
+                    DebugLogger.log(
+                        .provider,
+                        "discogs hints for '\(recording.recordingTitle)': \(discogsQueries.joined(separator: ", "))"
+                    )
+                    let discogsBest = try await findBestViaTextSearch(
+                        recording: recording,
+                        titleQueries: titleQueries,
+                        artistQueries: discogsQueries
+                    )
+                    if let discogsBest {
+                        if let currentBest = best {
+                            best = chooseBetter(currentBest, discogsBest)
+                        } else {
+                            best = discogsBest
+                        }
+                    }
+                }
+            } catch let error as DiscogsClientError where error == .rateLimited {
+                DebugLogger.log(.provider, "discogs hint lookup rate-limited for '\(recording.recordingTitle)'")
+            } catch {
+                DebugLogger.log(.provider, "discogs hint lookup failed for '\(recording.recordingTitle)': \(error)")
+            }
+        }
+
+        let attemptedArtistQuery = !baseArtistQueries.isEmpty || !discogsQueries.isEmpty
+
+        guard let best else {
+            return .unresolved(attemptedArtistQuery ? .noSpotifyMatch : .missingArtistCredits)
+        }
+
+        guard best.score >= textSearchMinScore else {
+            DebugLogger.log(
+                .provider,
+                "text search rejected '\(recording.recordingTitle)' bestScore=\(String(format: "%.3f", best.score))"
+            )
+            return .unresolved(.noSpotifyMatch)
+        }
+
+        return .resolved(
+            ResolvedTrack(
+                recordingMBID: recording.recordingMBID,
+                recordingTitle: recording.recordingTitle,
+                spotifyURI: best.track.uri,
+                spotifyPopularity: best.track.popularity,
+                matchStrategy: .textSearch
+            )
+        )
+    }
+
+    private func findBestViaTextSearch(
+        recording: ArtistRecordingRel,
+        titleQueries: [String],
+        artistQueries: [String]
+    ) async throws -> ScoredSpotifyTrack? {
+        guard !titleQueries.isEmpty, !artistQueries.isEmpty else {
+            return nil
+        }
+
+        var best: ScoredSpotifyTrack?
         searchLoop: for (titleIndex, titleQuery) in titleQueries.enumerated() {
             let isRelaxed = titleIndex > 0
 
@@ -271,27 +346,7 @@ actor TrackMatchingService {
             }
         }
 
-        guard let best else {
-            return .unresolved(.noSpotifyMatch)
-        }
-
-        guard best.score >= textSearchMinScore else {
-            DebugLogger.log(
-                .provider,
-                "text search rejected '\(recording.recordingTitle)' bestScore=\(String(format: "%.3f", best.score))"
-            )
-            return .unresolved(.noSpotifyMatch)
-        }
-
-        return .resolved(
-            ResolvedTrack(
-                recordingMBID: recording.recordingMBID,
-                recordingTitle: recording.recordingTitle,
-                spotifyURI: best.track.uri,
-                spotifyPopularity: best.track.popularity,
-                matchStrategy: .textSearch
-            )
-        )
+        return best
     }
 
     private func chooseBetter(_ lhs: ScoredSpotifyTrack, _ rhs: ScoredSpotifyTrack) -> ScoredSpotifyTrack {
@@ -460,6 +515,10 @@ actor TrackMatchingService {
         }
 
         return ordered
+    }
+
+    private func normalizedArtistKey(_ value: String) -> String {
+        CreditsTextNormalizer.normalize(value, options: artistNormalization)
     }
 
     private func buildTitleQueries(for title: String) -> [String] {

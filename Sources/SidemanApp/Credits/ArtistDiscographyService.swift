@@ -13,6 +13,14 @@ actor ArtistDiscographyService {
     private let maxTotalRecordings = 650
     private let maxHydratedWorks = 120
     private let canonicalMatchThreshold = 0.74
+    private let titleSimilarityFloor = 0.82
+    private let noOverlapScoreFloor = 0.88
+    private let titleWeightWithOverlap = 0.72
+    private let artistOverlapWeight = 0.28
+    private let titleWeightWithoutOverlap = 0.90
+    private let isrcMatchBonus = 0.10
+    private let coCreditContainsScore = 0.95
+    private let maxArtistFingerprintCount = 5
 
     init(musicBrainzClient: MusicBrainzClient, cache: DiscographyCache) {
         self.musicBrainzClient = musicBrainzClient
@@ -34,11 +42,18 @@ actor ArtistDiscographyService {
     func fetchCoCreditDiscography(
         artistA: CoCreditArtist,
         artistB: CoCreditArtist,
-        matchMode: CoCreditMatchMode
+        matchMode: CoCreditMatchMode,
+        roleFilter: CreditRoleGroup? = nil
     ) async throws -> DiscographyResult {
         let pairKey = coCreditCacheKey(artistAID: artistA.mbid, artistBID: artistB.mbid, matchMode: matchMode)
         if let cached = await cache.get(for: pairKey) {
-            return cached
+            let filtered = applyRoleFilter(cached.recordings, roleFilter: roleFilter)
+            return DiscographyResult(
+                artistMBID: cached.artistMBID,
+                artistName: cached.artistName,
+                recordings: filtered,
+                fetchedAt: cached.fetchedAt
+            )
         }
 
         let discographyA = try await fetchAllDiscography(artistMBID: artistA.mbid, artistName: artistA.name)
@@ -81,7 +96,14 @@ actor ArtistDiscographyService {
         )
 
         await cache.set(result, for: pairKey)
-        return result
+
+        let filtered = applyRoleFilter(result.recordings, roleFilter: roleFilter)
+        return DiscographyResult(
+            artistMBID: result.artistMBID,
+            artistName: result.artistName,
+            recordings: filtered,
+            fetchedAt: result.fetchedAt
+        )
     }
 
     private func applyRoleFilter(_ recordings: [ArtistRecordingRel], roleFilter: CreditRoleGroup?) -> [ArtistRecordingRel] {
@@ -264,6 +286,11 @@ actor ArtistDiscographyService {
         return "co-credit:v2:\(sorted[0])|\(sorted[1])|\(matchMode.rawValue)"
     }
 
+    /// Intersects two artist discographies via a 3-stage cascade:
+    /// 1. **MBID match** — exact recording ID overlap (highest confidence)
+    /// 2. **ISRC match** — shared International Standard Recording Codes across remaining unmatched recordings
+    /// 3. **Canonical key match** — normalized title + artist credit similarity with configurable thresholds
+    /// Each stage only processes recordings left unmatched by previous stages.
     private func intersectRecordings(lhs: [ArtistRecordingRel], rhs: [ArtistRecordingRel]) -> CoCreditIntersectionResult {
         let lhsCanonical = canonicalizeRecordings(lhs)
         let rhsCanonical = canonicalizeRecordings(rhs)
@@ -397,7 +424,7 @@ actor ArtistDiscographyService {
                     let titleSimilarity = CreditsTextSimilarity.jaccardSimilarity(
                         normalizedCoCreditTitle(left.recordingTitle),
                         normalizedCoCreditTitle(candidate.recordingTitle),
-                        containsMatchScore: 0.95
+                        containsMatchScore: coCreditContainsScore
                     )
                     let score = Double(shared) + (0.05 * titleSimilarity)
                     scoredCandidates.append((candidate, score))
@@ -492,28 +519,33 @@ actor ArtistDiscographyService {
         )
     }
 
+    /// Scores a candidate canonical-key match between two recordings.
+    /// When artist credit overlap is available, title and artist signals are
+    /// blended (lower threshold since artist overlap adds confidence).
+    /// When no artist overlap exists, the title must clear a higher bar on its
+    /// own to avoid false positives from common song names.
     private func canonicalMatchScore(left: ArtistRecordingRel, right: ArtistRecordingRel) -> Double? {
         let titleSimilarity = CreditsTextSimilarity.jaccardSimilarity(
             normalizedCoCreditTitle(left.recordingTitle),
             normalizedCoCreditTitle(right.recordingTitle),
-            containsMatchScore: 0.95
+            containsMatchScore: coCreditContainsScore
         )
-        guard titleSimilarity >= 0.82 else {
+        guard titleSimilarity >= titleSimilarityFloor else {
             return nil
         }
 
         let artistOverlap = artistCreditOverlapRatio(left: left, right: right) ?? 0
-        let isrcBonus = sharedISRCs(left: left, right: right).isEmpty ? 0 : 0.10
+        let bonus = sharedISRCs(left: left, right: right).isEmpty ? 0 : isrcMatchBonus
         let score: Double
 
         if artistOverlap > 0 {
-            score = (0.72 * titleSimilarity) + (0.28 * artistOverlap) + isrcBonus
+            score = (titleWeightWithOverlap * titleSimilarity) + (artistOverlapWeight * artistOverlap) + bonus
             guard score >= canonicalMatchThreshold else {
                 return nil
             }
         } else {
-            score = (0.90 * titleSimilarity) + isrcBonus
-            guard score >= 0.88 else {
+            score = (titleWeightWithoutOverlap * titleSimilarity) + bonus
+            guard score >= noOverlapScoreFloor else {
                 return nil
             }
         }
@@ -586,6 +618,12 @@ actor ArtistDiscographyService {
     private func canonicalJoinKey(for recording: ArtistRecordingRel) -> String {
         let normalizedISRC = normalizedISRCs(recording).sorted().first
         if let normalizedISRC {
+            // Include a coarse title signal so that genuinely different recordings
+            // sharing an ISRC (compilations, data errors) aren't collapsed together.
+            let title = normalizedCoCreditTitle(recording.recordingTitle)
+            if !title.isEmpty {
+                return "isrc:\(normalizedISRC)|t:\(title)"
+            }
             return "isrc:\(normalizedISRC)"
         }
 
@@ -609,7 +647,7 @@ actor ArtistDiscographyService {
             return ""
         }
         let uniqueSorted = Array(Set(normalized)).sorted()
-        return uniqueSorted.prefix(3).joined(separator: "&")
+        return uniqueSorted.prefix(maxArtistFingerprintCount).joined(separator: "&")
     }
 
     private func normalizedCoCreditTitle(_ title: String) -> String {

@@ -19,6 +19,7 @@ All network clients and caches are Swift actors with configurable rate limiting.
 | Protocol | Purpose |
 |---|---|
 | `MusicBrainzClient` | Recording search, relationship lookup, ISRC fetch, artist browse |
+| `DiscogsClient` | Optional release/track lookup for extra artist hints during playlist matching |
 | `WikipediaAPIClient` | Page search and wikitext fetch |
 | `TrackResolver` | Resolves `NowPlayingTrack` to a MusicBrainz recording/release |
 | `WikipediaPageResolver` | Resolves album/artist to a Wikipedia page |
@@ -73,6 +74,10 @@ Actor with 0.4s minimum interval. Searches `en.wikipedia.org` and fetches page c
 ### `ListenBrainzClient`
 
 Actor querying `api.listenbrainz.org` for recording popularity. Supports batch POST (up to 1000 MBIDs) with fallback to per-artist top recordings.
+
+### `DiscogsHTTPClient` (optional)
+
+Actor querying `api.discogs.com` with a personal access token (`SIDEMAN_DISCOGS_TOKEN`). Used only by playlist track matching as an auxiliary source when MusicBrainz artist credits are sparse or missing.
 
 ## Caching
 

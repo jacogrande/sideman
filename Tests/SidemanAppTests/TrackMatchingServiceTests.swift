@@ -170,6 +170,160 @@ final class TrackMatchingServiceTests: XCTestCase {
         let queries = await spotifyClient.recordedTextQueries()
         XCTAssertTrue(queries.contains("From tha Chuuuch to da Palace||Snoop Dogg"))
     }
+
+    func testResolveToSpotifyDetailedUsesDiscogsHintsWhenNoArtistQueriesAvailable() async throws {
+        let recording = ArtistRecordingRel(
+            recordingMBID: "rec-6",
+            recordingTitle: "I’m Lovin’ It",
+            relationshipType: "producer",
+            attributes: [],
+            artistCredits: [],
+            isrcs: []
+        )
+
+        let spotifyClient = StubSpotifyWebAPI(
+            searchTracksResponses: [
+                "I’m Lovin’ It||Pharrell Williams": [
+                    spotifyTrack(
+                        id: "sp-6",
+                        name: "I'm Lovin' It",
+                        uri: "spotify:track:6",
+                        artists: ["Justin Timberlake", "Pharrell Williams"],
+                        popularity: 65
+                    )
+                ]
+            ]
+        )
+        let mbClient = StubMusicBrainzClient()
+        let discogsClient = StubDiscogsClient(
+            hintsByTitle: [
+                "I’m Lovin’ It": ["Pharrell Williams"]
+            ]
+        )
+
+        let service = TrackMatchingService(
+            musicBrainzClient: mbClient,
+            spotifyClient: spotifyClient,
+            discogsClient: discogsClient,
+            maxConcurrency: 1
+        )
+
+        let summary = try await service.resolveToSpotifyDetailed(
+            recordings: [recording],
+            fallbackArtistQueries: []
+        ) { _, _ in }
+
+        XCTAssertEqual(summary.resolved.count, 1)
+        XCTAssertTrue(summary.unresolved.isEmpty)
+
+        let discogsQueries = await discogsClient.recordedQueries()
+        XCTAssertEqual(discogsQueries, ["I’m Lovin’ It"])
+    }
+
+    func testResolveToSpotifyDetailedUsesDiscogsHintsAfterBaseQueriesFail() async throws {
+        let recording = ArtistRecordingRel(
+            recordingMBID: "rec-7",
+            recordingTitle: "From tha Chuuuch to da Palace",
+            relationshipType: "producer",
+            attributes: [],
+            artistCredits: ["Wrong Alias"],
+            isrcs: []
+        )
+
+        let spotifyClient = StubSpotifyWebAPI(
+            searchTracksResponses: [
+                "From tha Chuuuch to da Palace||Wrong Alias": [],
+                "From tha Chuuuch to da Palace||Pharrell Williams": [
+                    spotifyTrack(
+                        id: "sp-7",
+                        name: "From tha Chuuuch to da Palace",
+                        uri: "spotify:track:7",
+                        artists: ["Snoop Dogg", "Pharrell Williams"],
+                        popularity: 68
+                    )
+                ]
+            ]
+        )
+        let mbClient = StubMusicBrainzClient()
+        let discogsClient = StubDiscogsClient(
+            hintsByTitle: [
+                "From tha Chuuuch to da Palace": ["Pharrell Williams"]
+            ]
+        )
+
+        let service = TrackMatchingService(
+            musicBrainzClient: mbClient,
+            spotifyClient: spotifyClient,
+            discogsClient: discogsClient,
+            maxConcurrency: 1
+        )
+
+        let summary = try await service.resolveToSpotifyDetailed(
+            recordings: [recording],
+            fallbackArtistQueries: []
+        ) { _, _ in }
+
+        XCTAssertEqual(summary.resolved.count, 1)
+        XCTAssertTrue(summary.unresolved.isEmpty)
+
+        let queries = await spotifyClient.recordedTextQueries()
+        XCTAssertTrue(queries.contains("From tha Chuuuch to da Palace||Wrong Alias"))
+        XCTAssertTrue(queries.contains("From tha Chuuuch to da Palace||Pharrell Williams"))
+
+        let discogsQueries = await discogsClient.recordedQueries()
+        XCTAssertEqual(discogsQueries, ["From tha Chuuuch to da Palace"])
+    }
+
+    func testResolveToSpotifyDetailedSkipsDuplicateDiscogsHintsAlreadyQueried() async throws {
+        let recording = ArtistRecordingRel(
+            recordingMBID: "rec-8",
+            recordingTitle: "Beautiful",
+            relationshipType: "main",
+            attributes: [],
+            artistCredits: ["Pharrell Williams"],
+            isrcs: []
+        )
+
+        let spotifyClient = StubSpotifyWebAPI(
+            searchTracksResponses: [
+                "Beautiful||Pharrell Williams": [],
+                "Beautiful||Snoop Dogg": [
+                    spotifyTrack(
+                        id: "sp-8",
+                        name: "Beautiful",
+                        uri: "spotify:track:8",
+                        artists: ["Snoop Dogg", "Pharrell Williams"],
+                        popularity: 75
+                    )
+                ]
+            ]
+        )
+        let mbClient = StubMusicBrainzClient()
+        let discogsClient = StubDiscogsClient(
+            hintsByTitle: [
+                "Beautiful": ["Pharrell Williams", "Snoop Dogg"]
+            ]
+        )
+
+        let service = TrackMatchingService(
+            musicBrainzClient: mbClient,
+            spotifyClient: spotifyClient,
+            discogsClient: discogsClient,
+            maxConcurrency: 1
+        )
+
+        let summary = try await service.resolveToSpotifyDetailed(
+            recordings: [recording],
+            fallbackArtistQueries: []
+        ) { _, _ in }
+
+        XCTAssertEqual(summary.resolved.count, 1)
+        XCTAssertTrue(summary.unresolved.isEmpty)
+
+        let queries = await spotifyClient.recordedTextQueries()
+        XCTAssertEqual(queries.filter { $0 == "Beautiful||Pharrell Williams" }.count, 1)
+        XCTAssertTrue(queries.contains("Beautiful||Snoop Dogg"))
+    }
 }
 
 private actor StubMusicBrainzClient: MusicBrainzClient {
@@ -234,6 +388,24 @@ private actor StubSpotifyWebAPI: SpotifyWebAPI {
 
     func recordedTextQueries() -> [String] {
         textQueries
+    }
+}
+
+private actor StubDiscogsClient: DiscogsClient {
+    let hintsByTitle: [String: [String]]
+    private var queries: [String] = []
+
+    init(hintsByTitle: [String: [String]] = [:]) {
+        self.hintsByTitle = hintsByTitle
+    }
+
+    func artistHintsForTrack(title: String, artistHints: [String], limit: Int) async throws -> [String] {
+        queries.append(title)
+        return Array((hintsByTitle[title] ?? []).prefix(max(0, limit)))
+    }
+
+    func recordedQueries() -> [String] {
+        queries
     }
 }
 
