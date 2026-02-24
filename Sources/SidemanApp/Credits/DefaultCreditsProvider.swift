@@ -100,10 +100,21 @@ actor DefaultCreditsProvider: CreditsProvider {
 
         var allEntries = CreditsMapper.mapRelations(recording.relations, sourceLevel: .recording)
 
-        let discoveredWorkIDs = CreditsMapper.extractWorkIDs(from: recording)
-        let allWorkIDs = Set(discoveredWorkIDs + resolution.workMBIDs)
+        // Extract work-level credits from embedded relations (via work-level-rels).
+        // Always mark embedded works as fetched, even if they have no relations —
+        // an empty list is a valid state and doesn't need a separate API call.
+        var fetchedWorkIDs = Set<String>()
+        for relation in recording.relations {
+            guard let work = relation.work else { continue }
+            let workEntries = CreditsMapper.mapRelations(work.relations, sourceLevel: .work)
+            allEntries.append(contentsOf: workEntries)
+            fetchedWorkIDs.insert(work.id)
+        }
 
-        for workID in allWorkIDs {
+        let discoveredWorkIDs = CreditsMapper.extractWorkIDs(from: recording)
+        let remainingWorkIDs = Set(discoveredWorkIDs + resolution.workMBIDs).subtracting(fetchedWorkIDs)
+
+        for workID in remainingWorkIDs {
             do {
                 let work = try await client.getWork(id: workID)
                 let workEntries = CreditsMapper.mapRelations(work.relations, sourceLevel: .work)

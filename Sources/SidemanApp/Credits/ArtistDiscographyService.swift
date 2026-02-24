@@ -10,11 +10,13 @@ actor ArtistDiscographyService {
         .collapseWhitespace
     ]
     private let coCreditArtistNormalization: TextNormalizationOptions = [.alphanumericsOnly, .collapseWhitespace]
-    private let maxTotalRecordings = 650
-    private let maxHydratedWorks = 120
+    private let maxRecordingRelItems = 200
+    private let maxBrowseItems = 500
+    private let maxWorkRelItems = 200
+    private let maxHydratedWorks = 150
     private let canonicalMatchThreshold = 0.74
-    private let titleSimilarityFloor = 0.82
-    private let noOverlapScoreFloor = 0.88
+    private let titleSimilarityFloor = 0.75
+    private let noOverlapScoreFloor = 0.82
     private let titleWeightWithOverlap = 0.72
     private let artistOverlapWeight = 0.28
     private let titleWeightWithoutOverlap = 0.90
@@ -35,7 +37,8 @@ actor ArtistDiscographyService {
             artistMBID: all.artistMBID,
             artistName: all.artistName,
             recordings: filtered,
-            fetchedAt: all.fetchedAt
+            fetchedAt: all.fetchedAt,
+            wasTruncated: all.wasTruncated
         )
     }
 
@@ -52,7 +55,8 @@ actor ArtistDiscographyService {
                 artistMBID: cached.artistMBID,
                 artistName: cached.artistName,
                 recordings: filtered,
-                fetchedAt: cached.fetchedAt
+                fetchedAt: cached.fetchedAt,
+                wasTruncated: cached.wasTruncated
             )
         }
 
@@ -88,11 +92,13 @@ actor ArtistDiscographyService {
             throw PlaylistBuilderError.noIntersectionFound
         }
 
+        let coCreditTruncated = discographyA.wasTruncated || discographyB.wasTruncated
         let result = DiscographyResult(
             artistMBID: pairKey,
             artistName: "\(artistA.name) × \(artistB.name)",
             recordings: intersection.recordings,
-            fetchedAt: Date()
+            fetchedAt: Date(),
+            wasTruncated: coCreditTruncated
         )
 
         await cache.set(result, for: pairKey)
@@ -102,7 +108,8 @@ actor ArtistDiscographyService {
             artistMBID: result.artistMBID,
             artistName: result.artistName,
             recordings: filtered,
-            fetchedAt: result.fetchedAt
+            fetchedAt: result.fetchedAt,
+            wasTruncated: result.wasTruncated
         )
     }
 
@@ -136,7 +143,10 @@ actor ArtistDiscographyService {
             let rels = try await musicBrainzClient.getArtistRecordingRels(id: artistMBID)
             stats.recordingRels = rels.count
 
-            for rel in rels {
+            if rels.count > maxRecordingRelItems {
+                stats.truncated = true
+            }
+            for rel in rels.prefix(maxRecordingRelItems) {
                 try Task.checkCancellation()
                 upsertRecording(
                     rel,
@@ -147,9 +157,6 @@ actor ArtistDiscographyService {
                     confidence: 1.0,
                     into: &recordingsByMBID
                 )
-                if recordingsByMBID.count >= maxTotalRecordings {
-                    break
-                }
             }
             DebugLogger.log(.provider, "recording-rels: \(rels.count) unique=\(recordingsByMBID.count)")
         } catch is CancellationError {
@@ -162,8 +169,9 @@ actor ArtistDiscographyService {
             var offset = 0
             let pageSize = 100
             var hasMore = true
+            var browseProcessed = 0
 
-            while hasMore && recordingsByMBID.count < maxTotalRecordings {
+            while hasMore && browseProcessed < maxBrowseItems {
                 try Task.checkCancellation()
                 let page = try await musicBrainzClient.browseRecordings(
                     artistID: artistMBID,
@@ -183,13 +191,18 @@ actor ArtistDiscographyService {
                         confidence: 0.90,
                         into: &recordingsByMBID
                     )
-                    if recordingsByMBID.count >= maxTotalRecordings {
+                    browseProcessed += 1
+                    if browseProcessed >= maxBrowseItems {
                         break
                     }
                 }
 
                 offset += page.recordings.count
                 hasMore = offset < page.totalCount && !page.recordings.isEmpty
+            }
+
+            if hasMore {
+                stats.truncated = true
             }
 
             DebugLogger.log(.provider, "browse recordings complete total=\(recordingsByMBID.count)")
@@ -202,12 +215,12 @@ actor ArtistDiscographyService {
         do {
             let workRels = try await musicBrainzClient.getArtistWorkRels(id: artistMBID)
             stats.workRels = workRels.count
+            var workRelRecordings = 0
+            var successfulHydrations = 0
 
             for workRel in workRels {
-                if recordingsByMBID.count >= maxTotalRecordings {
-                    break
-                }
-                if stats.workHydrationAttempts >= maxHydratedWorks {
+                if workRelRecordings >= maxWorkRelItems || successfulHydrations >= maxHydratedWorks {
+                    stats.truncated = true
                     break
                 }
 
@@ -216,6 +229,7 @@ actor ArtistDiscographyService {
 
                 do {
                     let workRecordings = try await musicBrainzClient.getWorkRecordings(id: workRel.workMBID)
+                    successfulHydrations += 1
                     stats.workHydratedRecordings += workRecordings.count
                     for workRecording in workRecordings {
                         let mapped = ArtistRecordingRel(
@@ -235,7 +249,8 @@ actor ArtistDiscographyService {
                             confidence: 0.74,
                             into: &recordingsByMBID
                         )
-                        if recordingsByMBID.count >= maxTotalRecordings {
+                        workRelRecordings += 1
+                        if workRelRecordings >= maxWorkRelItems {
                             break
                         }
                     }
@@ -263,14 +278,15 @@ actor ArtistDiscographyService {
             "recording_rels=\(stats.recordingRels) browse=\(stats.browseRecordings) " +
             "work_rels=\(stats.workRels) work_hydration_attempts=\(stats.workHydrationAttempts) " +
             "work_hydrated_recordings=\(stats.workHydratedRecordings) work_hydration_failures=\(stats.workHydrationFailures) " +
-            "unique_recordings=\(allRecordings.count)"
+            "unique_recordings=\(allRecordings.count) truncated=\(stats.truncated)"
         )
 
         let result = DiscographyResult(
             artistMBID: artistMBID,
             artistName: artistName,
             recordings: allRecordings,
-            fetchedAt: Date()
+            fetchedAt: Date(),
+            wasTruncated: stats.truncated
         )
 
         await cache.set(result, for: cacheKey)
@@ -825,5 +841,6 @@ actor ArtistDiscographyService {
         var workHydrationAttempts: Int = 0
         var workHydratedRecordings: Int = 0
         var workHydrationFailures: Int = 0
+        var truncated: Bool = false
     }
 }

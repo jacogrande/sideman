@@ -351,6 +351,13 @@ struct MBArtist: Equatable {
 struct MBWorkReference: Equatable {
     let id: String
     let title: String
+    let relations: [MBRelationship]
+
+    init(id: String, title: String, relations: [MBRelationship] = []) {
+        self.id = id
+        self.title = title
+        self.relations = relations
+    }
 }
 
 struct CachedCredits: Equatable, Codable {
@@ -484,6 +491,24 @@ struct DiscographyResult: Equatable, Codable {
     let artistName: String
     let recordings: [ArtistRecordingRel]
     let fetchedAt: Date
+    let wasTruncated: Bool
+
+    init(artistMBID: String, artistName: String, recordings: [ArtistRecordingRel], fetchedAt: Date, wasTruncated: Bool = false) {
+        self.artistMBID = artistMBID
+        self.artistName = artistName
+        self.recordings = recordings
+        self.fetchedAt = fetchedAt
+        self.wasTruncated = wasTruncated
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        artistMBID = try container.decode(String.self, forKey: .artistMBID)
+        artistName = try container.decode(String.self, forKey: .artistName)
+        recordings = try container.decode([ArtistRecordingRel].self, forKey: .recordings)
+        fetchedAt = try container.decode(Date.self, forKey: .fetchedAt)
+        wasTruncated = try container.decodeIfPresent(Bool.self, forKey: .wasTruncated) ?? false
+    }
 }
 
 struct MBBrowseRecordingsPage: Equatable {

@@ -105,7 +105,7 @@ actor SpotifyWebAPIClient: SpotifyWebAPI {
             queryItems: [
                 URLQueryItem(name: "q", value: query),
                 URLQueryItem(name: "type", value: "track"),
-                URLQueryItem(name: "limit", value: "3")
+                URLQueryItem(name: "limit", value: "10")
             ]
         )
 

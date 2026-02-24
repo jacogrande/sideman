@@ -58,7 +58,7 @@ actor MusicBrainzHTTPClient: MusicBrainzClient {
         let endpoint = Endpoint(
             path: "recording/\(id)",
             queryItems: [
-                URLQueryItem(name: "inc", value: "artist-rels+work-rels+releases"),
+                URLQueryItem(name: "inc", value: "artist-rels+work-rels+work-level-rels+releases"),
                 URLQueryItem(name: "fmt", value: "json")
             ]
         )
@@ -361,7 +361,13 @@ actor MusicBrainzHTTPClient: MusicBrainzClient {
             targetType: dto.targetType,
             attributes: dto.attributes,
             artist: dto.artist.map { MBArtist(id: $0.id, name: $0.name) },
-            work: dto.work.map { MBWorkReference(id: $0.id, title: $0.title) }
+            work: dto.work.map { work in
+                MBWorkReference(
+                    id: work.id,
+                    title: work.title,
+                    relations: work.relations.map(toRelationship)
+                )
+            }
         )
     }
 }
@@ -516,16 +522,19 @@ private struct ArtistDTO: Decodable {
 private struct WorkReferenceDTO: Decodable {
     let id: String
     let title: String
+    let relations: [RelationshipDTO]
 
     enum CodingKeys: String, CodingKey {
         case id
         case title
+        case relations
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
         title = try container.decodeIfPresent(String.self, forKey: .title) ?? ""
+        relations = try container.decodeIfPresent([RelationshipDTO].self, forKey: .relations) ?? []
     }
 }
 

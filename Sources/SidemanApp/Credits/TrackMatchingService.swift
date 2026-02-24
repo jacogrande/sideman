@@ -5,7 +5,7 @@ actor TrackMatchingService {
     private let spotifyClient: SpotifyWebAPI
     private let discogsClient: DiscogsClient?
     private let maxConcurrency: Int
-    private let textSearchMinScore = 0.58
+    private let textSearchMinScore = 0.50
     private let textSearchStrongScore = 0.80
     private let maxArtistQueries = 4
     private let titleNormalization: TextNormalizationOptions = [
@@ -191,24 +191,33 @@ actor TrackMatchingService {
             }
         }
 
-        for isrc in isrcs.prefix(3) {
+        // ISRC is a strong identifier but not guaranteed unique across distributors.
+        // Accept the most popular match with a loose title sanity check to guard
+        // against ISRC collisions from data quality issues.
+        let normalizedTarget = CreditsTextNormalizer.normalize(
+            recording.recordingTitle, options: titleNormalization
+        )
+
+        for isrc in isrcs.prefix(6) {
             try Task.checkCancellation()
             do {
                 let tracks = try await spotifyClient.searchTrackByISRC(isrc)
-                if let best = bestSpotifyCandidate(
-                    in: tracks,
-                    recording: recording,
-                    queryArtist: recording.artistCredits.first ?? "",
-                    isRelaxedQuery: false,
-                    preferredISRC: isrc
-                ) {
-                    return ResolvedTrack(
-                        recordingMBID: recording.recordingMBID,
-                        recordingTitle: recording.recordingTitle,
-                        spotifyURI: best.track.uri,
-                        spotifyPopularity: best.track.popularity,
-                        matchStrategy: .isrc
+                if let track = tracks.max(by: { ($0.popularity ?? 0) < ($1.popularity ?? 0) }) {
+                    let normalizedCandidate = CreditsTextNormalizer.normalize(
+                        track.name, options: titleNormalization
                     )
+                    let similarity = CreditsTextSimilarity.jaccardSimilarity(
+                        normalizedTarget, normalizedCandidate, containsMatchScore: 0.85
+                    )
+                    if similarity >= 0.40 {
+                        return ResolvedTrack(
+                            recordingMBID: recording.recordingMBID,
+                            recordingTitle: recording.recordingTitle,
+                            spotifyURI: track.uri,
+                            spotifyPopularity: track.popularity,
+                            matchStrategy: .isrc
+                        )
+                    }
                 }
             } catch let error as SpotifyClientError where error == .rateLimited {
                 throw error
