@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Privacy Policy — Sideman</title>
+  <link rel="icon" type="image/png" href="/logo.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300..700&display=swap" rel="stylesheet" />
+  <style>
+    :root { --bg: #0C0C0A; --cream: #F0EBE3; --gold: #F9C58D; --muted: #7A756C; }
+    * { box-sizing: border-box; margin: 0; }
+    body { font-family: "Outfit", system-ui, sans-serif; background: var(--bg); color: var(--cream); line-height: 1.7; -webkit-font-smoothing: antialiased; }
+    .container { max-width: 680px; margin: 0 auto; padding: 4rem 1.5rem 6rem; }
+    a { color: var(--gold); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    h1 { font-size: 2rem; font-weight: 600; margin-bottom: 0.5rem; }
+    h2 { font-size: 1.15rem; font-weight: 600; margin-top: 2.5rem; margin-bottom: 0.75rem; color: var(--gold); }
+    p, li { color: var(--cream); opacity: 0.85; margin-bottom: 0.75rem; font-size: 0.95rem; }
+    ul { padding-left: 1.25rem; }
+    li { margin-bottom: 0.4rem; }
+    .meta { font-size: 0.85rem; color: var(--muted); margin-bottom: 2.5rem; }
+    .back { display: inline-block; margin-bottom: 2rem; font-size: 0.85rem; color: var(--muted); }
+    hr { border: none; height: 1px; background: linear-gradient(90deg, transparent, var(--gold), transparent); opacity: 0.2; margin: 2.5rem 0; }
+    table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
+    th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid rgba(240,235,227,0.08); }
+    th { color: var(--gold); font-weight: 500; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <a class="back" href="/">&larr; Back to Sideman</a>
+    <h1>Privacy Policy</h1>
+    <p class="meta">Effective February 25, 2026 &middot; Last updated February 25, 2026</p>
+
+    <p>Sideman is a macOS menu bar application that surfaces music credits and generates playlists. It is built and operated by Jackson (&ldquo;we,&rdquo; &ldquo;us,&rdquo; or &ldquo;our&rdquo;). This policy describes what data Sideman handles, how it is used, and your choices.</p>
+
+    <h2>The short version</h2>
+    <p>Sideman runs entirely on your Mac. We do not operate servers, collect analytics, or track you. The app reads your current Spotify playback locally, queries public music databases for credits, and uses the Spotify Web API only to create playlists with your explicit permission. No personal data is sent to us because there is no &ldquo;us&rdquo; to send it to &mdash; there is no Sideman backend.</p>
+
+    <h2>Playback detection</h2>
+    <p>Sideman detects the currently playing track using macOS AppleScript, a local system call to the Spotify desktop app. This happens entirely on your Mac. The track title, artist, album, and Spotify track ID are read from the local Spotify process. This information is never transmitted to Sideman servers (none exist) and is used only to look up credits from third-party music databases.</p>
+
+    <h2>Spotify authorization</h2>
+    <p>To create playlists, Sideman requests your permission via Spotify&rsquo;s standard OAuth 2.0 flow using PKCE (Proof Key for Code Exchange). The only permissions requested are:</p>
+    <ul>
+      <li><strong>playlist-modify-public</strong> &mdash; create and edit public playlists</li>
+      <li><strong>playlist-modify-private</strong> &mdash; create and edit private playlists</li>
+    </ul>
+    <p>Sideman does not request access to your listening history, saved library, user profile, or any other Spotify data. OAuth tokens are stored in your macOS Keychain with <code>kSecAttrAccessibleWhenUnlockedThisDeviceOnly</code> protection and are never transmitted beyond the Spotify API. You can revoke access at any time from your <a href="https://www.spotify.com/account/apps/">Spotify account settings</a>.</p>
+
+    <h2>Third-party services</h2>
+    <p>To resolve credits and build playlists, Sideman sends track metadata (title, artist, album) to the following public APIs. No personal information or Spotify credentials are included in these requests.</p>
+
+    <table>
+      <thead>
+        <tr><th>Service</th><th>Purpose</th><th>Data sent</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>MusicBrainz</td><td>Recording lookup, artist credits, discography</td><td>Track title, artist, album</td></tr>
+        <tr><td>Wikipedia</td><td>Supplementary album/track credits</td><td>Page search queries</td></tr>
+        <tr><td>ListenBrainz</td><td>Recording popularity ranking</td><td>MusicBrainz recording IDs</td></tr>
+        <tr><td>Discogs</td><td>Fallback artist/track matching</td><td>Track title, artist name</td></tr>
+        <tr><td>Spotify Web API</td><td>Track search, playlist creation</td><td>OAuth token, track URIs, playlist metadata</td></tr>
+      </tbody>
+    </table>
+
+    <p>Each of these services has its own privacy policy. We encourage you to review them:</p>
+    <ul>
+      <li><a href="https://metabrainz.org/privacy">MusicBrainz / MetaBrainz Privacy Policy</a></li>
+      <li><a href="https://foundation.wikimedia.org/wiki/Privacy_policy">Wikipedia / Wikimedia Privacy Policy</a></li>
+      <li><a href="https://www.spotify.com/privacy">Spotify Privacy Policy</a></li>
+      <li><a href="https://www.discogs.com/privacy">Discogs Privacy Policy</a></li>
+    </ul>
+
+    <h2>Local data storage</h2>
+    <p>Sideman stores two cache files on your Mac to avoid redundant network requests:</p>
+    <ul>
+      <li><strong>credits-cache.json</strong> &mdash; cached credit lookups, auto-expiring</li>
+      <li><strong>discography-cache.json</strong> &mdash; cached artist discographies, expires after 7 days</li>
+    </ul>
+    <p>Both files are stored in <code>~/Library/Application Support/sideman/</code> and contain only music metadata (track titles, artist names, roles, MusicBrainz IDs). They do not contain personal information. Uninstalling Sideman removes these files.</p>
+
+    <h2>What we do not collect</h2>
+    <ul>
+      <li>No analytics, telemetry, or crash reporting</li>
+      <li>No listening history or playback logs</li>
+      <li>No user accounts, emails, or personal profiles</li>
+      <li>No device identifiers, IP addresses, or location data</li>
+      <li>No third-party SDKs or tracking libraries</li>
+      <li>No advertising or marketing data</li>
+    </ul>
+    <p>Sideman has zero external dependencies. The app is built entirely with Swift standard libraries and Apple frameworks.</p>
+
+    <h2>Children&rsquo;s privacy</h2>
+    <p>Sideman does not knowingly collect any personal information from anyone, including children under 13. Since no personal data is collected or transmitted to us, there is no data to manage in this regard.</p>
+
+    <h2>Data attribution</h2>
+    <p>Music credits displayed in Sideman are sourced from <a href="https://musicbrainz.org">MusicBrainz</a> (core data licensed under CC0) and <a href="https://www.wikipedia.org">Wikipedia</a> (content licensed under CC BY-SA). Popularity data is provided by <a href="https://listenbrainz.org">ListenBrainz</a>.</p>
+
+    <h2>Changes to this policy</h2>
+    <p>If we make material changes to this policy, we will update the date at the top of this page. Since Sideman does not collect contact information, this page is the sole notification channel for policy changes.</p>
+
+    <h2>Contact</h2>
+    <p>Questions about this policy? Email <a href="mailto:hello@sideman.app">hello@sideman.app</a>.</p>
+
+    <hr />
+    <p style="font-size: 0.8rem; color: var(--muted);">&copy; 2026 A Hassle&rarr;Bad Production</p>
+  </div>
+</body>
+</html>

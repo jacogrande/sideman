@@ -943,13 +943,19 @@ function Download() {
 function Footer() {
   return (
     <footer className="mx-auto max-w-7xl border-t border-[var(--subtle)] px-6 py-10 md:px-10">
-      <div className="flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
+      <div className="flex flex-col items-start justify-between gap-6 sm:flex-row sm:items-center">
         <p className="font-display text-lg italic text-[var(--muted)]/50">
           For the people behind the music.
         </p>
-        <p className="text-xs text-[var(--muted)]/30">
-          &copy; 2026 A Hassle&rarr;Bad Production
-        </p>
+        <div className="flex flex-col items-end gap-2">
+          <div className="flex gap-4 text-xs text-[var(--muted)]/40">
+            <a href="/privacy.html" className="transition-colors hover:text-[var(--gold)]">Privacy</a>
+            <a href="/terms.html" className="transition-colors hover:text-[var(--gold)]">Terms</a>
+          </div>
+          <p className="text-xs text-[var(--muted)]/30">
+            &copy; 2026 A Hassle&rarr;Bad Production
+          </p>
+        </div>
       </div>
     </footer>
   );
