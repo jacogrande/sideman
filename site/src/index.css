@@ -4,8 +4,8 @@
 :root {
   --bg: #0C0C0A;
   --cream: #F0EBE3;
-  --gold: #D4A574;
-  --cyan: #22D3EE;
+  --gold: #F9C58D;
+  --orchid: #E07CFF;
   --emerald: #34D399;
   --muted: #7A756C;
   --subtle: #1A1915;
@@ -35,14 +35,14 @@ body {
   min-height: 100vh;
   background:
     radial-gradient(
-      ellipse at 30% 20%,
-      rgba(212, 165, 116, 0.03),
-      transparent 50%
+      ellipse at 25% 15%,
+      rgba(249, 197, 141, 0.12),
+      transparent 55%
     ),
     radial-gradient(
-      ellipse at 70% 80%,
-      rgba(212, 165, 116, 0.02),
-      transparent 50%
+      ellipse at 75% 85%,
+      rgba(224, 124, 255, 0.08),
+      transparent 55%
     ),
     var(--bg);
   color: var(--cream);
@@ -230,11 +230,11 @@ html.js-ready .reveal.visible .stagger {
     90deg,
     transparent,
     var(--gold) 20%,
-    var(--subtle) 50%,
-    var(--gold) 80%,
+    var(--subtle) 45%,
+    var(--orchid) 80%,
     transparent
   );
-  opacity: 0.35;
+  opacity: 0.3;
 }
 
 /* ── Giant step numbers ── */
@@ -245,8 +245,11 @@ html.js-ready .reveal.visible .stagger {
   font-size: clamp(3.5rem, 10vw, 7rem);
   line-height: 1.1;
   font-weight: 100;
-  color: var(--gold);
-  opacity: 0.3;
+  background: linear-gradient(135deg, var(--gold), var(--orchid));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  opacity: 0.25;
   user-select: none;
 }
 
@@ -258,7 +261,9 @@ html.js-ready .reveal.visible .stagger {
 }
 
 .glow-hover:hover {
-  box-shadow: 0 0 40px rgba(212, 165, 116, 0.2);
+  box-shadow:
+    0 0 30px rgba(249, 197, 141, 0.15),
+    0 0 60px rgba(224, 124, 255, 0.08);
   transform: translateY(-1px);
 }
 

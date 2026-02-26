@@ -99,13 +99,13 @@ const NAME_CLOUD_DATA: {
   { name: "Nile Rodgers", x: 8, y: 10, size: 1.3, rotate: -8, opacity: 0.35, serif: true, color: "var(--gold)", layer: 1 },
   { name: "Carol Kaye", x: 55, y: 5, size: 1.0, rotate: 4, opacity: 0.2, serif: false, color: "var(--cream)", layer: 2 },
   { name: "Questlove", x: 25, y: 30, size: 1.6, rotate: -3, opacity: 0.3, serif: true, color: "var(--gold)", layer: 1 },
-  { name: "Herbie Hancock", x: 60, y: 28, size: 0.85, rotate: 7, opacity: 0.18, serif: false, color: "var(--muted)", layer: 3 },
+  { name: "Herbie Hancock", x: 60, y: 28, size: 0.85, rotate: 7, opacity: 0.18, serif: false, color: "var(--orchid)", layer: 3 },
   { name: "Pino Palladino", x: 5, y: 52, size: 1.1, rotate: 5, opacity: 0.25, serif: true, color: "var(--cream)", layer: 2 },
   { name: "Steve Gadd", x: 48, y: 50, size: 0.9, rotate: -6, opacity: 0.22, serif: false, color: "var(--gold)", layer: 1 },
-  { name: "Larry Graham", x: 72, y: 48, size: 1.2, rotate: 3, opacity: 0.28, serif: true, color: "var(--muted)", layer: 3 },
+  { name: "Larry Graham", x: 72, y: 48, size: 1.2, rotate: 3, opacity: 0.22, serif: true, color: "var(--orchid)", layer: 3 },
   { name: "Sheila E.", x: 15, y: 72, size: 1.4, rotate: -4, opacity: 0.32, serif: true, color: "var(--gold)", layer: 2 },
   { name: "James Jamerson", x: 50, y: 70, size: 0.8, rotate: 8, opacity: 0.15, serif: false, color: "var(--cream)", layer: 1 },
-  { name: "Bob Clearmountain", x: 30, y: 88, size: 0.75, rotate: -2, opacity: 0.17, serif: false, color: "var(--muted)", layer: 3 },
+  { name: "Bob Clearmountain", x: 30, y: 88, size: 0.75, rotate: -2, opacity: 0.15, serif: false, color: "var(--orchid)", layer: 3 },
   { name: "Tony Visconti", x: 68, y: 85, size: 1.0, rotate: 5, opacity: 0.23, serif: true, color: "var(--gold)", layer: 2 },
   { name: "Sylvia Massy", x: 8, y: 92, size: 0.9, rotate: -7, opacity: 0.2, serif: false, color: "var(--cream)", layer: 1 },
 ];
@@ -367,8 +367,8 @@ function VinylRecord({ className = "" }: { className?: string }) {
           <stop offset="100%" stopColor="transparent" />
         </radialGradient>
         <radialGradient id="vinyl-label" cx="0.38" cy="0.32" r="0.6">
-          <stop offset="0%" stopColor="#E8BC82" />
-          <stop offset="100%" stopColor="#B8895C" />
+          <stop offset="0%" stopColor="#F9C58D" />
+          <stop offset="100%" stopColor="#D4A06A" />
         </radialGradient>
       </defs>
     </svg>
@@ -458,7 +458,7 @@ function Nav() {
     <header className="animate-fade-up absolute left-0 right-0 top-0 z-20 mx-auto flex w-full max-w-7xl items-center justify-between px-6 py-6 md:px-10">
       <a className="flex items-center gap-3" href="/">
         <img
-          src="/sideman.svg"
+          src="/logo.png"
           alt="Sideman"
           className="h-8 w-8 rounded-lg"
         />
@@ -489,8 +489,6 @@ function Hero() {
 
   return (
     <section className="relative flex min-h-screen items-center overflow-hidden">
-      {/* Warm ambient glow */}
-      <div className="pointer-events-none absolute left-1/3 top-1/4 h-[500px] w-[500px] rounded-full bg-[var(--gold)]/[0.03] blur-[120px]" />
 
       {/* Vinyl — desktop, slides in from right */}
       <div className="vinyl-slide pointer-events-none absolute right-[-15%] top-1/2 hidden md:block lg:right-[-8%]">
@@ -894,9 +892,9 @@ function Download() {
   return (
     <Reveal>
       <section id="download" className="mx-auto max-w-7xl pb-20 md:px-10">
-        <div className="relative overflow-hidden border-y border-[var(--gold)]/15 px-6 py-12 sm:py-16 md:rounded-2xl md:border md:px-16 md:py-20">
+        <div className="relative overflow-hidden border-y border-[var(--orchid)]/10 px-6 py-12 sm:py-16 md:rounded-2xl md:border md:px-16 md:py-20">
           {/* Warm stage-light glow */}
-          <div className="pointer-events-none absolute -right-20 -top-20 h-64 w-64 rounded-full bg-[var(--gold)]/[0.06] blur-3xl" />
+          <div className="pointer-events-none absolute -right-20 -top-20 h-64 w-64 rounded-full bg-[var(--orchid)]/[0.12] blur-3xl" />
 
           <div className="relative max-w-xl">
             <p className="text-xs font-medium uppercase tracking-[0.25em] text-[var(--gold)]">
@@ -950,7 +948,7 @@ function Footer() {
           For the people behind the music.
         </p>
         <p className="text-xs text-[var(--muted)]/30">
-          &copy; {new Date().getFullYear()} Sideman
+          &copy; 2026 A Hassle&rarr;Bad Production
         </p>
       </div>
     </footer>
@@ -964,6 +962,8 @@ function Footer() {
 function App() {
   return (
     <div className="texture relative min-h-screen bg-[var(--bg)]">
+      {/* Orchid glow — positioned at top-level to avoid overflow clipping */}
+      <div className="pointer-events-none absolute left-[5%] top-[8%] h-[600px] w-[600px] rounded-full bg-[var(--orchid)]/[0.12] blur-[150px]" />
       <Nav />
       <main>
         <Hero />
