@@ -37,7 +37,7 @@
     <p>Sideman is a macOS menu bar application that surfaces music credits and generates playlists. It is built and operated by Jackson (&ldquo;we,&rdquo; &ldquo;us,&rdquo; or &ldquo;our&rdquo;). This policy describes what data Sideman handles, how it is used, and your choices.</p>
 
     <h2>The short version</h2>
-    <p>Sideman runs entirely on your Mac. We do not operate servers, collect analytics, or track you. The app reads your current Spotify playback locally, queries public music databases for credits, and uses the Spotify Web API only to create playlists with your explicit permission. No personal data is sent to us because there is no &ldquo;us&rdquo; to send it to &mdash; there is no Sideman backend.</p>
+    <p>The Sideman app runs entirely on your Mac. We do not operate app servers, and the app does not collect analytics or track you. It reads your current Spotify playback locally, queries public music databases for credits, and uses the Spotify Web API only to create playlists with your explicit permission. Our website (sideman.app) uses privacy-friendly, cookie-free analytics to measure page views &mdash; see details below.</p>
 
     <h2>Playback detection</h2>
     <p>Sideman detects the currently playing track using macOS AppleScript, a local system call to the Spotify desktop app. This happens entirely on your Mac. The track title, artist, album, and Spotify track ID are read from the local Spotify process. This information is never transmitted to Sideman servers (none exist) and is used only to look up credits from third-party music databases.</p>
@@ -84,7 +84,7 @@
 
     <h2>What we do not collect</h2>
     <ul>
-      <li>No analytics, telemetry, or crash reporting</li>
+      <li>No analytics, telemetry, or crash reporting in the app (website uses cookie-free Vercel Analytics)</li>
       <li>No listening history or playback logs</li>
       <li>No user accounts, emails, or personal profiles</li>
       <li>No device identifiers, IP addresses, or location data</li>
@@ -92,6 +92,9 @@
       <li>No advertising or marketing data</li>
     </ul>
     <p>Sideman has zero external dependencies. The app is built entirely with Swift standard libraries and Apple frameworks.</p>
+
+    <h2>Website analytics</h2>
+    <p>The Sideman website (sideman.app) uses <a href="https://vercel.com/docs/analytics">Vercel Analytics</a> to collect anonymous, aggregated usage data such as page views, referrer URLs, and country of origin. Vercel Analytics does not use cookies, does not track individual users across sites, and does not collect personal information such as IP addresses or device identifiers. We also track anonymous click events on download buttons to understand interest. No data from the website is linked to your use of the Sideman app. You can review <a href="https://vercel.com/docs/analytics/privacy-policy">Vercel&rsquo;s Analytics privacy policy</a> for details.</p>
 
     <h2>Children&rsquo;s privacy</h2>
     <p>Sideman does not knowingly collect any personal information from anyone, including children under 13. Since no personal data is collected or transmitted to us, there is no data to manage in this regard.</p>

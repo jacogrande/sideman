@@ -1,4 +1,6 @@
 import { useEffect, useRef, type CSSProperties } from "react";
+import { Analytics } from "@vercel/analytics/react";
+import { track } from "@vercel/analytics";
 
 /* ════════════════════════════════════════════════
    Utilities
@@ -469,6 +471,7 @@ function Nav() {
       <a
         className="glow-hover rounded-full border border-[var(--gold)]/30 px-5 py-2 text-xs font-medium uppercase tracking-[0.15em] text-[var(--gold)] transition-colors hover:border-[var(--gold)]/60 hover:text-[var(--cream)]"
         href="#download"
+        onClick={() => track("download_nav_click")}
       >
         Download
       </a>
@@ -525,6 +528,7 @@ function Hero() {
           <a
             className="glow-hover rounded-full bg-[var(--gold)] px-7 py-3.5 text-sm font-semibold text-[var(--bg)]"
             href="#download"
+            onClick={() => track("download_hero_click")}
           >
             Download for macOS
           </a>
@@ -911,6 +915,7 @@ function Download() {
             <a
               className="glow-hover mt-8 inline-flex rounded-full bg-[var(--gold)] px-7 py-3.5 text-sm font-semibold text-[var(--bg)]"
               href="mailto:hello@sideman.app?subject=Sideman%20Beta%20Access"
+              onClick={() => track("beta_request_click")}
             >
               Request Beta Access
             </a>
@@ -980,6 +985,7 @@ function App() {
         <Download />
       </main>
       <Footer />
+      <Analytics />
     </div>
   );
 }
